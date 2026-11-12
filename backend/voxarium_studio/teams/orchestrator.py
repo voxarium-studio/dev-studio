@@ -90,13 +90,6 @@ from .usage import RunUsage, usage_components, usage_directions
 log = logging.getLogger(__name__)
 
 
-def summary_language(locale: str | None) -> str:
-    """Resolve the per-task locale without inventing a global project language (§10.4)."""
-    return {"ru": "Russian", "en": "English"}.get(
-        locale or "", "the language used by the user in the task brief and conversation"
-    )
-
-
 def _summary_locale(locale: str | None) -> str | None:
     if locale is not None and locale not in {"en", "ru"}:
         raise ValueError("Summary locale must be en or ru")
@@ -2507,7 +2500,7 @@ class TeamOrchestrator:
                 memory=memory_prompt(self.memory, self.config.teams, has_tools=toolset is not None),
                 prompts=self.config.teams.prompts,
                 code_graph=code_graph_file(launch_root),
-                language=summary_language(task.summary_locale),
+                language=self.config.respond_language,
                 skills=member_skills.found,
             )
             # §10.5: every run, including resumed sessions, sees the current write contract.
@@ -2749,7 +2742,7 @@ class TeamOrchestrator:
                 and (await self._reload(task_id)).result_type is None
             ):
                 follow_up = self.config.teams.prompts.text(
-                    "result_required", language=summary_language((await self._reload(task_id)).summary_locale)
+                    "result_required", language=self.config.respond_language,
                 )
             session_id = (await self._reload(task_id)).agent_session_id
             # Nothing is awaited between this test and the close below, so a note the inbox
@@ -4122,7 +4115,7 @@ def _build_system_prompt(
     code_graph: Path | None = None,
     chat: bool = False,
     skills: Sequence[Skill] = (),
-    language: str = summary_language(None),
+    language: str = "English",
 ) -> str:
     """What this *run* tells the agent, as the session's whole system prompt (§10.3).
 

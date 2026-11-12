@@ -1,5 +1,16 @@
 # Changelog
 
+## v5.7.0 — 2026-11-12
+
+- Added selective import of Claude Code, Codex and Qwen Code memory into project memory, with previews and explicit replacement of conflicting entries.
+- Added a shared model selector and per-chat and per-task backend/model overrides. Plugins can use the same selector through the frontend runtime.
+- Reworked agent startup prompts so Studio composes the run's system prompt consistently across backends. Studio-equipped agents are prompted to delegate suitable work to subagents; Effort Solver chooses each subagent's effort and scores tasks left on Auto when they start.
+- Extended Graphify's document pass to Claude Code, Codex and Qwen Code, with a model choice on its settings page. Added Qwen Code session context to Context Viewer.
+- Added a global Respond Language setting, independent of the UI language, for agent responses, task results and Producer prompts. It accepts any language name and defaults to English.
+- Refined transcripts: subagent launches stay expanded with visible Effort Solver progress, task creation uses the violet Studio block, and other Studio tools join ordinary tool blocks.
+- Added a right-click Delete action to chat lists and made chat deletion immediate across chat and Producer views. File-observation progress and incomplete-scan warnings remain in stored evidence without cluttering the conversation or changes panel.
+- Improved task status and file-change panels, fixed pipeline and connection edge cases, and sped up Windows installer builds.
+
 ## v5.6.0 — 2026-11-11
 
 - Added online Documents sync through the separately deployed Voxarium Studio Remote server. Each person keeps a local Studio and project checkout; Markdown documents sync across them, and open documents support live collaborative editing with shared cursors. Project Settings now has an Online sync connection panel.

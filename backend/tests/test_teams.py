@@ -47,7 +47,7 @@ from voxarium_studio.teams.backends.base import (
     register_backend,
     register_live_session,
 )
-from voxarium_studio.teams.orchestrator import DelegationLimitError, RoutingError, summary_language
+from voxarium_studio.teams.orchestrator import DelegationLimitError, RoutingError
 from voxarium_studio.teams.tools import build_toolset
 
 TEAM = "team_default"
@@ -57,8 +57,8 @@ DEV = f"{TEAM}__dev"  # agent, reports to the director
 QA = f"{TEAM}__qa"  # human, may assign to designer and dev
 
 
-def _summary_prompt(key: str, locale: str | None = None) -> str:
-    return AgentPromptsConfig().text(key, language=summary_language(locale))
+def _summary_prompt(key: str, language: str = "English") -> str:
+    return AgentPromptsConfig().text(key, language=language)
 
 
 class StubBackend:
@@ -4789,10 +4789,15 @@ async def test_a_run_that_reported_lands_in_review_with_its_type_and_the_reporte
 
 
 @pytest.mark.parametrize("locale", ["ru", "en", None])
-async def test_short_summary_is_the_only_response_and_uses_the_task_language(
-    teams: AppContext, wait_for, locale: str | None,
+@pytest.mark.parametrize("response_language", [None, "日本語"])
+async def test_short_summary_uses_response_preference_not_legacy_locale(
+    teams: AppContext, wait_for, locale: str | None, response_language: str | None,
 ) -> None:
     pytest.importorskip("claude_agent_sdk")
+    teams.config.language = "ru"
+    if response_language is not None:
+        teams.config.respond_language = response_language
+    language = response_language or "English"
     teams.config.teams.result_follow_up = True
     seen = _reporting_backend(
         teams, "silent_summary", report=[("done", "Fixed. Checks passed.")], silent=True,
@@ -4802,7 +4807,7 @@ async def test_short_summary_is_the_only_response_and_uses_the_task_language(
     assert finished.summary_locale == locale
     assert finished.result_summary == "Fixed. Checks passed."
     assert len(seen) == 1, "the stored summary completes the task without another model turn"
-    assert _summary_prompt("finish_tool", locale) in seen[0].system_prompt
+    assert _summary_prompt("finish_tool", language) in seen[0].system_prompt
     assert "{language}" not in seen[0].system_prompt
     async with teams.db.session() as session:
         messages = (await session.exec(select(AgentMessage).where(
@@ -4814,24 +4819,27 @@ async def test_short_summary_is_the_only_response_and_uses_the_task_language(
     ]
 
 
-async def test_summary_locale_survives_release_and_changes_for_a_review_resume(
+async def test_review_resume_reads_current_response_preference_not_summary_locale(
     teams: AppContext, wait_for,
 ) -> None:
     seen = await _record_requests(teams, "locale_resume")
+    teams.config.language = "ru"
     task = await teams.teams.create_task(
-        team_id=TEAM, assignee_id=DESIGNER, title="English brief", brief="Use the saved UI language.",
+        team_id=TEAM, assignee_id=DESIGNER, title="English brief", brief="Use the response preference.",
         auto_start=True, summary_locale="ru",
     )
     await release(teams, task.id)
     await wait_for(task.id, timeout=20)
-    assert _summary_prompt("finish_tool", "ru") in seen[0].system_prompt
+    assert (await load(teams, task.id)).summary_locale == "ru"
+    assert _summary_prompt("finish_tool", "English") in seen[0].system_prompt
+    teams.config.respond_language = "Español"
     await teams.teams.request_changes(task.id, "Revise it.", summary_locale="en")
     await wait_for(task.id, timeout=20)
     assert (await load(teams, task.id)).summary_locale == "en"
-    assert _summary_prompt("finish_tool", "en") in seen[1].system_prompt
+    assert _summary_prompt("finish_tool", "Español") in seen[1].system_prompt
 
 
-async def test_delegated_summary_language_comes_from_parent_or_producer(teams: AppContext) -> None:
+async def test_legacy_summary_locale_metadata_is_inherited_from_parent_or_producer(teams: AppContext) -> None:
     parent = await teams.teams.create_task(
         team_id=TEAM, assignee_id=DESIGNER, title="Parent", brief="b", summary_locale="ru",
     )
@@ -4849,10 +4857,15 @@ async def test_delegated_summary_language_comes_from_parent_or_producer(teams: A
 
 
 @pytest.mark.parametrize("locale", ["ru", "en", None])
+@pytest.mark.parametrize("response_language", [None, "日本語"])
 async def test_a_run_that_skipped_the_report_is_asked_once_in_the_same_session(
-    teams: AppContext, wait_for, locale: str | None,
+    teams: AppContext, wait_for, locale: str | None, response_language: str | None,
 ) -> None:
     pytest.importorskip("claude_agent_sdk")
+    teams.config.language = "ru"
+    if response_language is not None:
+        teams.config.respond_language = response_language
+    language = response_language or "English"
     teams.config.teams.result_follow_up = True
     seen = _reporting_backend(
         teams, "reporting_late", report=[None, ("question", "Which cooldown do you want?")]
@@ -4862,7 +4875,9 @@ async def test_a_run_that_skipped_the_report_is_asked_once_in_the_same_session(
 
     assert len(seen) == 2
     follow_up = seen[1]
-    assert follow_up.prompt == _summary_prompt("result_required", locale)
+    assert _summary_prompt("finish_tool", language) in seen[0].system_prompt
+    assert follow_up.prompt == _summary_prompt("result_required", language)
+    assert "{language}" not in follow_up.prompt
     assert follow_up.resume_session_id == "sess_1", "the same session, one more message"
     assert follow_up.images == [] and follow_up.recovery_prompt == ""
     assert finished.status == TaskStatus.NEEDS_REVIEW
@@ -4913,9 +4928,12 @@ async def test_the_follow_up_is_a_setting(teams: AppContext, wait_for) -> None:
 
 
 @pytest.mark.parametrize("missing_tools", ["disabled", "unavailable"])
+@pytest.mark.parametrize("language", ["English", "日本語"])
 async def test_no_result_follow_up_without_studio_tools(
-    teams: AppContext, wait_for, monkeypatch, missing_tools: str
+    teams: AppContext, wait_for, monkeypatch, missing_tools: str, language: str,
 ) -> None:
+    teams.config.language = "ru"
+    teams.config.respond_language = language
     teams.config.teams.result_follow_up = True
     if missing_tools == "disabled":
         teams.config.mcp.disabled = ["voxarium_studio"]
@@ -4923,11 +4941,11 @@ async def test_no_result_follow_up_without_studio_tools(
         monkeypatch.setattr("voxarium_studio.teams.orchestrator.build_toolset", lambda *a, **kw: None)
     seen = _reporting_backend(teams, "reporting_without_tools", report=[None])
 
-    finished = await _run_on(teams, wait_for, "reporting_without_tools")
+    finished = await _run_on(teams, wait_for, "reporting_without_tools", summary_locale="ru")
 
     assert len(seen) == 1, "do not spend another turn asking for an unavailable tool"
-    assert _summary_prompt("finish") in seen[0].system_prompt
-    assert _summary_prompt("finish_tool") not in seen[0].system_prompt
+    assert _summary_prompt("finish", language) in seen[0].system_prompt
+    assert _summary_prompt("finish_tool", language) not in seen[0].system_prompt
     assert finished.status == TaskStatus.NEEDS_REVIEW
     assert finished.result_type is None
     assert finished.result_summary == "Closing words."

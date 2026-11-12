@@ -307,16 +307,11 @@ function onComposerKeydown(event: KeyboardEvent): void {
 
 // ---- deleting
 
-const confirmingDelete = ref(false)
-
 async function deleteActive(): Promise<void> {
   const id = chat.activeChatId
   if (!id) return
   await chat.remove(id)
-  if (chat.activeChatId === id) confirmingDelete.value = false
 }
-
-watch(() => chat.activeChatId, () => (confirmingDelete.value = false))
 
 // ---- focus and lifecycle
 
@@ -332,10 +327,6 @@ watch(
 )
 
 function onEscape(): void {
-  if (confirmingDelete.value) {
-    confirmingDelete.value = false
-    return
-  }
   if (!docked.value) chat.hide()
 }
 
@@ -455,7 +446,9 @@ onBeforeUnmount(() => {
               <button
                 class="grid size-8 shrink-0 place-items-center rounded-md hover:bg-hover"
                 :title="t('chat.delete.action')"
-                @click="confirmingDelete = !confirmingDelete"
+                :disabled="chat.busy"
+                :aria-label="t('chat.delete.action')"
+                @click="deleteActive"
               >
                 <Trash2 class="size-4" />
               </button>
@@ -498,29 +491,6 @@ onBeforeUnmount(() => {
           <ChatHeaderChips v-if="chat.view === 'chat' && chat.activeChat && activeMember?.kind === 'agent'"
             :chat="chat.activeChat" :member="activeMember" :messages="chat.activeMessages" :levels="teams.options?.effort_levels" />
         </header>
-
-        <!-- Deleting is two clicks, in place: the popup is too small for a dialog over it. -->
-        <div
-          v-if="confirmingDelete"
-          class="flex items-center gap-2 border-b border-line bg-danger-soft px-3 py-2 text-small"
-          role="alertdialog"
-          :aria-label="t('chat.delete.confirmLabel')"
-        >
-          <span class="min-w-0 flex-1">{{ t('chat.delete.question') }}</span>
-          <!-- The colour is on the label: `base.css` gives every button `color: inherit`,
-               which outranks a `text-*` utility on the button itself. -->
-          <button
-            class="rounded-md px-2 py-1 font-medium hover:bg-hover"
-            :disabled="chat.busy"
-            :aria-label="t('chat.delete.action')"
-            @click="deleteActive"
-          >
-            <span class="text-danger">{{ t('common.delete') }}</span>
-          </button>
-          <button class="rounded-md px-2 py-1 hover:bg-hover" @click="confirmingDelete = false">
-            {{ t('common.cancel') }}
-          </button>
-        </div>
 
           <ProducerControls v-if="!producerPage" />
           <ChatList v-if="!docked && chat.view === 'list'" />

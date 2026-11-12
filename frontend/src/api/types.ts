@@ -1356,6 +1356,8 @@ export interface AppConfig {
   version: number
   /** User-wide preference; absent/null keeps the browser's startup language (§6.4). */
   language?: 'en' | 'ru' | null
+  /** User-wide agent response language; defaults to English (§6.4). */
+  respond_language?: string
   project_name: string | null
   /**
    * Short code in front of every task id — `VS` in `VS-01` (§10.2). Null means "not
@@ -1516,6 +1518,8 @@ export interface ApplicationSettingsUpdate {
   node_cache_enabled?: boolean
   show_data_dir?: boolean
   language?: 'en' | 'ru' | null
+  /** User-wide agent response language; defaults to English (§6.4). */
+  respond_language?: string
 }
 
 /** The version control system the managed project is under, if any (§10.5). */

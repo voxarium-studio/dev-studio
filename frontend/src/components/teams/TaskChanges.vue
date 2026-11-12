@@ -404,13 +404,13 @@ const commitNote = computed(() => {
         >
           {{ t('tasks.changes.observedHint') }}
         </p>
-        <p v-for="warning in changes?.observation_errors ?? []" :key="warning" class="px-3 py-2 text-small text-warning">
+        <p v-for="warning in (changes?.observation_errors ?? []).filter((warning) => !warning.startsWith('File observation incomplete:'))" :key="warning" class="px-3 py-2 text-small text-warning">
           {{ warning }}
         </p>
         <p v-for="warning in changes?.temp_errors ?? []" :key="`temp:${warning}`" class="px-3 py-2 text-small text-warning">
           {{ warning }}
         </p>
-        <p v-if="changes?.reason" class="border-t border-line-subtle px-3 py-2 text-small text-faint">
+        <p v-if="changes?.reason && !changes.reason.startsWith('This task ran in the project itself rather than its own checkout')" class="border-t border-line-subtle px-3 py-2 text-small text-faint">
           {{ changes.reason }}
         </p>
 

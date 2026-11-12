@@ -71,7 +71,7 @@ def test_first_legacy_project_seeds_global_preferences_only_once(tmp_path: Path)
     assert project_data["theme"] == {"accent": "#112233"}
     assert project_data["explorer"] == {"ignore": ["build"]}
     assert project_data["project_code"] == "ABC"
-    for key in ("updates", "language", "node_cache_enabled"):
+    for key in ("updates", "language", "respond_language", "node_cache_enabled"):
         assert key not in project_data
     assert load_config(paths).theme.mode == "light"
 
@@ -164,6 +164,33 @@ def test_global_save_changes_user_file_without_writing_project(client: TestClien
     assert client.get("/api/project").json()["config"]["language"] == "ru"
 
 
+def test_response_language_is_free_text_and_independent_of_ui(client: TestClient) -> None:
+    paths = client.app.state.ctx.paths
+    assert client.get("/api/settings").json()["respond_language"] == "English"
+    before = paths.config_file.read_bytes()
+    response = client.put("/api/settings/application", json={
+        "language": "ru", "respond_language": "Português (Brasil)",
+    })
+    assert response.status_code == 200
+    assert response.json()["respond_language"] == "Português (Brasil)"
+    assert response.json()["language"] == "ru"
+    assert read_yaml(application_config_file())["respond_language"] == "Português (Brasil)"
+    assert load_config(paths).respond_language == "Português (Brasil)"
+    assert paths.config_file.read_bytes() == before
+    assert client.put("/api/settings/application", json={"language": "en"}).status_code == 200
+    assert client.get("/api/settings").json()["respond_language"] == "Português (Brasil)"
+    # Project saves must not persist the effective global response preference.
+    save_config(paths, client.app.state.ctx.config)
+    assert "respond_language" not in read_yaml(paths.config_file)
+
+
+def test_existing_ui_preference_does_not_set_response_language(project: Path) -> None:
+    application_config_file().write_text("language: ru\n", encoding="utf-8")
+    config = load_config(ProjectPaths.for_project(project))
+    assert config.language == "ru"
+    assert config.respond_language == "English"
+
+
 @pytest.mark.parametrize("patch", [
     {"theme": {"accent": "#123456"}}, {"project_code": "OTHER"},
     {"teams": {"launch_root": "."}}, {"concurrency": {"agents": 7}},
@@ -191,6 +218,7 @@ def test_shared_preferences_update_resident_projects_without_touching_their_data
 
     response = client.put("/api/settings/application", json={
         "theme": {"sidebar": "icons", "mode": "light"}, "language": "ru",
+        "respond_language": "日本語",
         "show_data_dir": True, "node_cache_enabled": False, "updates": {"enabled": False},
     })
     assert response.status_code == 200
@@ -200,6 +228,7 @@ def test_shared_preferences_update_resident_projects_without_touching_their_data
         assert ctx.explorer.config.explorer.show_data_dir is True
         assert ctx.runner.config.node_cache_enabled is False
         assert ctx.config.language == "ru"
+        assert ctx.config.respond_language == "日本語"
         assert ctx.updates.config.enabled is False
         assert ctx.paths.config_file.read_bytes() == files_before[ctx.paths.config_file]
         assert load_config(ctx.paths).theme.mode == "light"

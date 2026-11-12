@@ -59,6 +59,7 @@ class SettingsUpdate(BaseModel):
     node_cache_enabled: bool | None = None
     show_data_dir: bool | None = None
     language: Literal["en", "ru"] | None = None
+    respond_language: str | None = None
 
 
 class ApplicationSettingsUpdate(BaseModel):
@@ -71,6 +72,7 @@ class ApplicationSettingsUpdate(BaseModel):
     node_cache_enabled: bool | None = None
     show_data_dir: bool | None = None
     language: Literal["en", "ru"] | None = None
+    respond_language: str | None = None
 
 
 class OpenProjectRequest(BaseModel):
@@ -299,6 +301,9 @@ async def _save_settings(payload: SettingsUpdate, ctx: AppContext) -> dict[str, 
         application_changed = True
     if "language" in payload.model_fields_set:
         application.language = payload.language
+        application_changed = True
+    if payload.respond_language is not None:
+        application.respond_language = payload.respond_language
         application_changed = True
 
     apply_application_config(draft, application)

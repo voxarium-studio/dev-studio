@@ -449,7 +449,7 @@ export const useChatStore = defineStore('chat', () => {
       forget(chatId)
       writeDraft(`${DRAFT_PREFIX}${chatId}`, '')
       return true
-    })
+    }, chatId)
   }
 
   function forget(chatId: string): void {

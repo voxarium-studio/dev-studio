@@ -2487,8 +2487,10 @@
     "onThisPage": "On this page",
     "language": {
       "title": "Language",
-      "label": "Interface",
-      "hint": "Saved in the application's {file} and used for all your projects."
+      "label": "UI Language",
+      "hint": "Saved in the application's {file} and used for all your projects.",
+      "respondLabel": "Respond Language",
+      "respondHint": "Language for agent responses in all projects. Enter any language name; the default is English."
     },
     "appearance": {
       "title": "Appearance",

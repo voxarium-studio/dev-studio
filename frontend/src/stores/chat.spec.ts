@@ -429,6 +429,27 @@ describe('the chat store', () => {
     } finally { deletion.mockRestore() }
   })
 
+  it('deletes an unselected chat while a different chat has a pending action', async () => {
+    installStorage()
+    listed = [chatRow({ id: 'current' }), chatRow({ id: 'other' })]
+    const store = useChatStore()
+    await store.load()
+    await store.openChat('current')
+    let complete!: (value: { chat_id: string; deleted: boolean }) => void
+    const deletion = vi.spyOn(api, 'deleteChat').mockImplementationOnce(() => new Promise(resolve => { complete = resolve }))
+    try {
+      const pending = store.remove('current')
+      expect(store.busy).toBe(true)
+      expect(await store.remove('other')).toBe(true)
+      expect(store.activeChatId).toBe('current')
+      expect(store.chats.map(chat => chat.id)).toEqual(['current'])
+      expect(deletion).toHaveBeenCalledWith('other')
+      complete({ chat_id: 'current', deleted: true })
+      expect(await pending).toBe(true)
+      expect(store.view).toBe('list')
+    } finally { deletion.mockRestore() }
+  })
+
   it('keeps a Producer chat and reports the error when deletion fails', async () => {
     installStorage()
     listed = [chatRow({ id: 'producer', producer_mode: true })]

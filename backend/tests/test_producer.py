@@ -151,7 +151,7 @@ async def test_start_is_only_for_producer_and_opens_a_localized_conversation(pro
     assert "Break a substantial goal into **many small, concrete tasks**" in request.prompt
     assert "Skill(voxarium_studio:producer)" in request.extra_allowed_tools
     assert "voxarium_studio:producer" in request.skill_files
-    assert "Speak Russian" in request.system_prompt
+    assert "Speak English" in request.system_prompt
     assert "Decision policy: Careful" in request.system_prompt
     assert "Ask the user what" in request.prompt
     assert "mcp__voxarium_studio__propose_producer_plan" in request.extra_allowed_tools
@@ -273,6 +273,20 @@ async def test_failed_first_turn_is_started_even_without_backend_session(produce
 
 
 @pytest.mark.parametrize("named_agent", [False, True])
+async def test_producer_language_uses_current_global_preference(producer, monkeypatch, named_agent):
+    monkeypatch.setattr(ProducerBackend, "named_agents", named_agent)
+    producer.config.respond_language = "Português (Brasil)"
+    chat = await producer.chats.create_chat(PRODUCER, producer_mode=True, locale="ru")
+    for language in ("Português (Brasil)", "日本語"):
+        producer.config.respond_language = language
+        await producer.chats.send(chat.id, "Continue", UserContext())
+        await finished(producer, chat.id)
+        resolved = producer.config.teams.prompts.text("producer_mode", language=language)
+        assert resolved in ProducerBackend.requests[-1].system_prompt
+        assert "{language}" not in ProducerBackend.requests[-1].system_prompt
+
+
+@pytest.mark.parametrize("named_agent", [False, True])
 @pytest.mark.parametrize("override", [None, "Custom Producer instructions. Speak {language}."])
 async def test_producer_system_prompt_is_resolved_once_only_in_active_mode(
     producer, monkeypatch, named_agent, override,
@@ -281,7 +295,7 @@ async def test_producer_system_prompt_is_resolved_once_only_in_active_mode(
     producer.config.teams.prompts.producer_mode = override
     await producer.teams.sync_agent_definitions()
     raw = producer.config.teams.prompts.text("producer_mode")
-    resolved = producer.config.teams.prompts.text("producer_mode", language="Russian")
+    resolved = producer.config.teams.prompts.text("producer_mode", language="English")
     chat = await producer.chats.create_chat(PRODUCER)
 
     await producer.chats.send(chat.id, "Hello", UserContext())

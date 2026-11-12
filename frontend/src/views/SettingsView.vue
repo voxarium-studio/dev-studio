@@ -67,6 +67,32 @@ async function chooseLocale(next: Locale) {
   }
 }
 
+/** Free-form response preference is independent from the interface locale (§6.4). */
+const savedRespondLanguage = computed(() => config.value?.respond_language ?? 'English')
+const respondLanguage = ref(savedRespondLanguage.value)
+const respondLanguageError = ref<string | null>(null)
+const savingRespondLanguage = ref(false)
+const respondLanguageDirty = computed(() => respondLanguage.value.trim() !== savedRespondLanguage.value)
+watch(savedRespondLanguage, (value) => {
+  respondLanguage.value = value
+})
+
+async function saveRespondLanguage() {
+  const value = respondLanguage.value.trim()
+  if (!value || !respondLanguageDirty.value || savingRespondLanguage.value) return
+  savingRespondLanguage.value = true
+  respondLanguageError.value = null
+  try {
+    const updated = await api.updateApplicationSettings({ respond_language: value })
+    if (session.project) session.project = { ...session.project, config: updated }
+    respondLanguage.value = updated.respond_language ?? value
+  } catch (cause) {
+    respondLanguageError.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    savingRespondLanguage.value = false
+  }
+}
+
 async function setTheme(patch: Parameters<typeof theme.update>[0]) {
   saveError.value = null
   try {
@@ -243,7 +269,7 @@ async function setNodeCache(value: boolean) {
           <section id="settings-language" class="vxs-enter scroll-mt-4">
             <h2 class="mb-2 font-medium">{{ t('settings.language.title') }}</h2>
 
-            <div class="vxs-card rounded-lg border border-card bg-surface p-4 shadow-card">
+            <div class="vxs-card space-y-4 rounded-lg border border-card bg-surface p-4 shadow-card">
               <div class="flex items-start gap-3">
                 <span class="w-28 shrink-0 pt-1 text-muted">{{ t('settings.language.label') }}</span>
                 <div class="min-w-0 flex-1 space-y-1.5">
@@ -260,6 +286,37 @@ async function setNodeCache(value: boolean) {
                   <p v-if="languageError" class="text-small text-warning">{{ languageError }}</p>
                 </div>
               </div>
+              <form class="flex items-start gap-3" @submit.prevent="saveRespondLanguage">
+                <label for="respond-language" class="w-28 shrink-0 pt-1 text-muted">
+                  {{ t('settings.language.respondLabel') }}
+                </label>
+                <div class="min-w-0 flex-1 space-y-1.5">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <input
+                      id="respond-language"
+                      v-model="respondLanguage"
+                      type="text"
+                      required
+                      :disabled="savingRespondLanguage"
+                      aria-describedby="respond-language-hint"
+                      class="min-w-0 rounded-md border border-line bg-inset px-2 py-1 outline-none focus:border-accent disabled:opacity-50"
+                    />
+                    <button
+                      type="submit"
+                      class="vxs-btn-primary px-3 py-1 disabled:opacity-50"
+                      :disabled="savingRespondLanguage || !respondLanguage.trim() || !respondLanguageDirty"
+                    >
+                      {{ t(savingRespondLanguage ? 'common.saving' : 'common.save') }}
+                    </button>
+                  </div>
+                  <p id="respond-language-hint" class="text-small text-faint">
+                    {{ t('settings.language.respondHint') }}
+                  </p>
+                  <p v-if="respondLanguageError" role="alert" class="text-small text-warning">
+                    {{ respondLanguageError }}
+                  </p>
+                </div>
+              </form>
             </div>
           </section>
 

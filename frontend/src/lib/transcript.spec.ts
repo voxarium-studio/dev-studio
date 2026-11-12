@@ -217,20 +217,97 @@ describe('blocks', () => {
     expect(first.studio).toBe(false)
   })
 
-  it('gives a run of Studio tools a block of its own, results and all', () => {
+  it('gives only Studio delegation and task creation a highlighted block, results and all', () => {
     const feed = [
       call('Read', { file_path: 'a.ts' }, { id: 'toolu_1' }),
-      call('mcp__voxarium_studio__get_task', {}, { id: 'toolu_2' }),
+      call('mcp__voxarium_studio__create_task', {}, { id: 'toolu_2' }),
       message({ role: 'system', kind: 'tool_result', text: 'DS-05', data: { tool_use_id: 'toolu_2' } }),
       call('mcp__voxarium_studio__spawn_subagent', {}, { id: 'toolu_3' }),
       call('Bash', { command: 'npm test' }),
     ]
     for (const level of ['default', 'verbose'] as const) {
       const blocks = transcriptBlocks(feed, level) as Tools[]
-      expect(blocks.map((block) => [block.studio, block.calls])).toEqual([[false, 1], [true, 2], [false, 1]])
+      expect(blocks.map((block) => [block.studio, block.spawn, block.calls])).toEqual([
+        [false, false, 1], [true, false, 1], [true, true, 1], [false, false, 1],
+      ])
     }
     const studio = transcriptBlocks(feed, 'verbose')[1] as Tools
     expect(studio.entries[0]!.results.map((result) => result.text)).toEqual(['DS-05'])
+  })
+
+  it.each(['default', 'verbose'] as const)('isolates adjacent own spawns from each other and create_task at %s', (level) => {
+    const feed = [
+      call('Read'),
+      call('mcp__voxarium_studio__create_task'),
+      call('mcp__voxarium_studio__create_task'),
+      call('mcp__voxarium_studio__spawn_subagent', {}, { id: 'spawn_a' }),
+      call('mcp__voxarium_studio__spawn_subagent', {}, { id: 'spawn_b' }),
+      call('mcp__voxarium_studio__create_task'),
+      call('mcp__voxarium_studio__spawn_subagent', {}, { id: 'spawn_c' }),
+      call('Bash'),
+    ]
+    const blocks = transcriptBlocks(feed, level) as Tools[]
+    expect(blocks.map((block) => [block.studio, block.spawn, block.calls])).toEqual([
+      [false, false, 1], [true, false, 2], [true, true, 1], [true, true, 1],
+      [true, false, 1], [true, true, 1], [false, false, 1],
+    ])
+    expect(blocks.filter((block) => block.spawn).map((block) => block.key))
+      .toEqual([feed[3]!.id, feed[4]!.id, feed[6]!.id])
+  })
+
+  it('attaches delayed, out-of-order results to isolated spawns by call ID at Verbose', () => {
+    const first = call('mcp__voxarium_studio__spawn_subagent', {}, { id: 'spawn_a' })
+    const second = call('mcp__voxarium_studio__spawn_subagent', {}, { id: 'spawn_b' })
+    const task = call('mcp__voxarium_studio__create_task', {}, { id: 'task' })
+    const answer = (id: string, text: string) =>
+      message({ role: 'system', kind: 'tool_result', text, data: { tool_use_id: id } })
+    const secondResult = answer('spawn_b', 'Second spawned')
+    const taskResult = answer('task', 'VS-17')
+    const firstResult = answer('spawn_a', 'First spawned')
+    const feed = [first, second, task, message({ text: 'Continuing other work.' }),
+      call('Read'), secondResult, taskResult, firstResult]
+    const blocks = transcriptBlocks(feed, 'verbose')
+    const tools = blocks.filter((block) => block.type === 'tools')
+    expect(tools.map((block) => [block.spawn, block.calls])).toEqual([
+      [true, 1], [true, 1], [false, 1], [false, 1],
+    ])
+    expect(tools.map((block) => block.entries[0]!.results)).toEqual([
+      [firstResult], [secondResult], [taskResult], [],
+    ])
+    expect([...resultsByCall(feed).entries()]).toEqual([
+      ['spawn_b', secondResult], ['task', taskResult], ['spawn_a', firstResult],
+    ])
+    expect(transcriptBlocks(feed, 'default').filter((block) => block.type === 'tools')
+      .map((block) => block.entries[0]!.results)).toEqual([[], [], [], []])
+  })
+
+  it('keeps other Studio calls and lookalike names in standard blocks on both levels', () => {
+    const ordinary = [
+      call('Read'),
+      ...['get_task', 'list_tasks', 'wait_subagents', 'get_subagent', 'finish_task', 'write_doc',
+        'spawn_subagent_extra', 'create_task_extra'].map((name) => call('mcp__voxarium_studio__' + name)),
+      call('mcp__other__spawn_subagent'),
+      call('mcp__other__create_task'),
+      call('spawn_subagent'),
+      call('create_task'),
+    ]
+    const feed = [
+      ...ordinary,
+      call('mcp__voxarium_studio__spawn_subagent', {}, { id: 'spawn' }),
+      call('mcp__voxarium_studio__get_task', {}, { id: 'get' }),
+      message({ role: 'system', kind: 'tool_result', text: 'spawned', data: { tool_use_id: 'spawn' } }),
+      call('mcp__voxarium_studio__create_task'),
+      call('Bash'),
+    ]
+    for (const level of ['default', 'verbose'] as const) {
+      const blocks = transcriptBlocks(feed, level) as Tools[]
+      expect(blocks.map((block) => [block.studio, block.calls])).toEqual([
+        [false, ordinary.length], [true, 1], [false, 1], [true, 1], [false, 1],
+      ])
+      if (level === 'verbose') {
+        expect(blocks[1]!.entries[0]!.results.map((result) => result.text)).toEqual(['spawned'])
+      }
+    }
   })
 
   it('keeps a frame before the first call in the block the call opens, whichever family', () => {
@@ -238,7 +315,7 @@ describe('blocks', () => {
       call('Read', { file_path: 'a.ts' }),
       message({ kind: 'text', text: 'Checking the board.' }),
       message({ role: 'system', kind: 'tool_result', text: 'orphan' }),
-      call('mcp__voxarium_studio__list_tasks'),
+      call('mcp__voxarium_studio__create_task'),
     ]
     const blocks = transcriptBlocks(feed, 'verbose')
     expect(blockTypes(blocks)).toEqual(['tools', 'message', 'tools'])

@@ -24,6 +24,7 @@ class ApplicationConfig(BaseModel):
     show_data_dir: bool = False
     node_cache_enabled: bool = True
     language: Literal["en", "ru"] | None = None
+    respond_language: str = "English"
 
     @classmethod
     def from_effective(cls, config: AppConfig) -> ApplicationConfig:
@@ -36,6 +37,7 @@ class ApplicationConfig(BaseModel):
             show_data_dir=config.explorer.show_data_dir,
             node_cache_enabled=config.node_cache_enabled,
             language=config.language,
+            respond_language=config.respond_language,
         )
 
 
@@ -95,3 +97,4 @@ def apply_application_config(config: AppConfig, application: ApplicationConfig) 
     config.explorer.show_data_dir = application.show_data_dir
     config.node_cache_enabled = application.node_cache_enabled
     config.language = application.language
+    config.respond_language = application.respond_language

@@ -467,7 +467,9 @@ class AppConfig(BaseModel):
 
     version: int = CONFIG_VERSION
     language: Literal["en", "ru"] | None = None
-    """Application language; null allows first-use migration from this browser's choice."""
+    """UI language; null allows first-use migration from this browser's choice (§6.4)."""
+    respond_language: str = "English"
+    """Free-form global language for prompt {language} substitutions (§6.4)."""
     project_name: str | None = None
     project_code: str | None = None
     """Short code every task id is displayed with — ``VS`` in ``VS-01`` (§10.2).
@@ -600,7 +602,7 @@ def _project_fields(raw: dict[str, Any]) -> dict[str, Any]:
         payload["theme"] = (
             {"accent": theme["accent"]} if isinstance(theme, dict) and "accent" in theme else {}
         )
-    for key in ("language", "updates", "node_cache_enabled"):
+    for key in ("language", "respond_language", "updates", "node_cache_enabled"):
         payload.pop(key, None)
     if isinstance(payload.get("explorer"), dict):
         payload["explorer"] = {

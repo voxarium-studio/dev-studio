@@ -91,10 +91,11 @@ describe('the transcript widget', () => {
     } }),
   })
 
-  async function renderFeed(messages: AgentMessage[], level: Verbosity, taskStatus = 'done'): Promise<string> {
+  async function renderFeed(messages: AgentMessage[], level: Verbosity, taskStatus = 'done', chat = false): Promise<string> {
     useVerbosity().value = level
     const app = createSSRApp(ConversationPanel, {
       conversationId: 'task_1', messages, emptyText: 'Nothing yet.', taskStatus,
+      ...(chat ? { chat: { name: 'Dev', running: taskStatus === 'in_progress' } } : {}),
     })
     return renderToString(app.use(createPinia()))
   }
@@ -108,23 +109,105 @@ describe('the transcript widget', () => {
     expect(html).toContain('border-violet-500/60')
   })
 
-  it('draws a spawn with the robot and its Effort Solver evaluation inside the fold', async () => {
-    // Default keeps the fold shut, the robot on its header; Verbose opens it onto the row.
-    const shut = await renderFeed(studioFeed(spawned), 'default')
-    expect(shut).not.toContain('data-subagent-spawn')
-    expect(shut).not.toContain('data-spawn-evaluation')
-    const open = await renderFeed(studioFeed(spawned), 'verbose')
-    expect(open).toContain('data-subagent-spawn')
-    expect(open.match(/data-spawn-evaluation/g)).toHaveLength(1)
-    expect(open).toContain('Complexity')
-    expect(open).toContain('Mid')
+  it('uses violet only for Studio spawn and create_task, leaving other tools standard', async () => {
+    const feed = [
+      call('Read', {}, 'mixed_1'),
+      call('mcp__voxarium_studio__get_task', {}, 'mixed_2'),
+      call('mcp__voxarium_studio__spawn_subagent', {}, 'mixed_3'),
+      call('mcp__voxarium_studio__wait_subagents', {}, 'mixed_4'),
+      call('mcp__voxarium_studio__create_task', {}, 'mixed_5'),
+      call('mcp__voxarium_studio__finish_task', {}, 'mixed_6'),
+      call('mcp__other__create_task', {}, 'mixed_7'),
+    ]
+    for (const level of ['default', 'verbose'] as const) {
+      const html = await renderFeed(feed, level)
+      expect(html.match(/data-transcript-fold/g)).toHaveLength(5)
+      expect(html.match(/data-studio-tools/g)).toHaveLength(2)
+      expect(html.match(/border-violet-500[/]60/g)).toHaveLength(2)
+      expect(html.match(/Studio tools used: 1/g)).toHaveLength(2)
+      expect(html.match(/Tools used: 2/g)).toHaveLength(2)
+    }
   })
 
-  it('says the evaluation is running while the spawn has not answered', async () => {
-    expect(await renderFeed(studioFeed(), 'verbose', 'in_progress')).toContain('Effort Solver is scoring this subagent')
-    const ended = await renderFeed(studioFeed(), 'verbose', 'cancelled')
-    expect(ended).not.toContain('Effort Solver is scoring')
-    expect(ended).not.toContain('data-spawn-evaluation')
+  const surfaces = (['default', 'verbose'] as const).flatMap((level) =>
+    [false, true].map((chat) => ({ level, chat })))
+
+  // Inspect headers, excluding any buttons belonging to the tool's content.
+  const foldHeaders = (html: string) =>
+    [...html.matchAll(/data-transcript-fold[^>]*>\s*(<(?:button|div)\b[\s\S]*?<\/(?:button|div)>)/g)]
+      .map((match) => match[1]!)
+
+  it.each(surfaces)('keeps a completed spawn open at $level (chat: $chat)', async ({ level, chat }) => {
+    const html = await renderFeed(studioFeed(spawned), level, 'done', chat)
+    expect(html).toContain('data-subagent-spawn')
+    expect(html.match(/data-spawn-evaluation/g)).toHaveLength(1)
+    expect(html).toContain('Review dash.ts')
+    expect(html).toContain('Complexity')
+    expect(html).toContain('Mid')
+    const headers = foldHeaders(html)
+    expect(headers).toHaveLength(2)
+    expect(headers[0]).toMatch(/^<button\b/)
+    expect(headers[0]).toContain('aria-expanded="' + (level === 'verbose') + '"')
+    expect(headers[1]).toMatch(/^<div\b/)
+    expect(headers[1]).not.toContain('aria-expanded')
+    expect(headers[1]).not.toContain('<button')
+    expect(headers[1]).not.toContain('vxs-chevron')
+  })
+
+  it.each(surfaces)('keeps pending Solver progress visible at $level (chat: $chat)', async ({ level, chat }) => {
+    const html = await renderFeed(studioFeed(), level, 'in_progress', chat)
+    expect(html).toContain('data-subagent-spawn')
+    expect(html).toContain('Review dash.ts')
+    expect(html).toContain('Effort Solver is scoring this subagent')
+    expect(html).not.toContain('data-spawn-evaluation')
+    expect(foldHeaders(html)[1]).toMatch(/^<div\b/)
+  })
+
+  it.each(surfaces)('does not invent an evaluation after a stop or error at $level (chat: $chat)', async ({ level, chat }) => {
+    const failed = { ...spawned, data: { ...spawned.data, is_error: true } }
+    const legacy = { ...spawned, text: JSON.stringify({ id: 'subagent_legacy' }) }
+    for (const [result, status] of [
+      [undefined, 'cancelled'], [undefined, 'error'], [failed, 'in_progress'], [legacy, 'done'],
+    ] as const) {
+      const html = await renderFeed(studioFeed(result), level, status, chat)
+      expect(html).toContain('data-subagent-spawn')
+      expect(html).not.toContain('Effort Solver is scoring')
+      expect(html).not.toContain('data-spawn-evaluation')
+      expect(html).not.toContain('Complexity')
+      expect(foldHeaders(html)[1]).toMatch(/^<div\b/)
+    }
+  })
+
+  it.each(surfaces)('isolates adjacent spawns and leaves create_task collapsible at $level (chat: $chat)', async ({ level, chat }) => {
+    const messages = [
+      call('mcp__voxarium_studio__create_task', { title: 'First task' }, 'task_a'),
+      call('mcp__voxarium_studio__spawn_subagent', { description: 'First review' }, 'spawn_a'),
+      call('mcp__voxarium_studio__spawn_subagent', { description: 'Second review' }, 'spawn_b'),
+      call('mcp__voxarium_studio__create_task', { title: 'Second task' }, 'task_b'),
+      message({ text: 'Continuing while results arrive.' }),
+      // Delayed results arrive beyond prose and in reverse order.
+      { ...spawned, id: 'result_b', data: { tool_use_id: 'spawn_b' } },
+      { ...spawned, id: 'result_a', data: { tool_use_id: 'spawn_a' },
+        text: JSON.stringify({ id: 'subagent_a', effort: 'high', effort_solver: {
+          scores: { complexity: 8, creativity: 5, depth: 6, coverage: 9 }, effort: 3, effort_level: 'high',
+        } }) },
+    ]
+    const html = await renderFeed(messages, level, 'in_progress', chat)
+    expect(html.match(/data-transcript-fold/g)).toHaveLength(4)
+    expect(html.match(/data-subagent-spawn/g)).toHaveLength(2)
+    expect(html.match(/data-spawn-evaluation/g)).toHaveLength(2)
+    expect(html).not.toContain('Effort Solver is scoring')
+    const headers = foldHeaders(html)
+    expect(headers.map((header) => header.startsWith('<div'))).toEqual([false, true, true, false])
+    for (const index of [0, 3]) {
+      expect(headers[index]).toContain('aria-expanded="' + (level === 'verbose') + '"')
+      expect(headers[index]).toContain('vxs-chevron')
+    }
+    const first = html.indexOf('First review', html.indexOf('data-subagent-spawn'))
+    const second = html.indexOf('Second review', html.indexOf('data-subagent-spawn'))
+    expect(html.slice(first, second)).toContain('High')
+    expect(html.slice(first, second)).not.toContain('Mid')
+    expect(html.slice(second)).toContain('Mid')
   })
 
   it('offers only Default and Verbose', async () => {
