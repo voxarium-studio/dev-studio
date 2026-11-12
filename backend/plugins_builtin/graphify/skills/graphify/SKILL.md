@@ -28,5 +28,5 @@ Report a missing or stale index when it affects your conclusion.
 
 The plugin owns indexing: its Graphify page shows status and offers Update and Rebuild all.
 Opening the project and completing a task can update it automatically. Do not reset, delete,
-rebuild, or install tools just to answer a search question. Indexing documents uses Claude
-Code; querying an existing graph does not require a new extraction.
+rebuild, or install tools just to answer a search question. Indexing documents uses the
+agent CLI chosen on the Graphify page (Claude Code, Codex or Qwen Code); querying an existing graph does not require a new extraction.

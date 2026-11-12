@@ -12,6 +12,7 @@
 import { useResizeObserver } from '@vueuse/core'
 import {
   ArrowDown,
+  Bot,
   Brain,
   Clock,
   FilePen,
@@ -32,6 +33,7 @@ import MarkdownText from '@/components/ui/MarkdownText.vue'
 import ModelEffortSlider from '@/components/ui/ModelEffortSlider.vue'
 import { t } from '@/i18n'
 import { toolName, toolSubject } from '@/lib/activity'
+import { spawnEffortSolver } from '@/lib/effort-solver'
 import { formatTime, statusColor, statusLabel } from '@/lib/status'
 import { resultTypeColor, resultTypeHint, resultTypeLabel, resultTypeOf } from '@/lib/task-result'
 import type { TranscriptBlock, TranscriptMessage } from '@/lib/transcript'
@@ -49,7 +51,9 @@ import {
   isFileEdit,
   isQueued,
   isSkillCall,
+  isSubagentSpawn,
   liveLine,
+  resultsByCall,
   tailLine,
   transcriptBlocks,
 } from '@/lib/transcript'
@@ -69,6 +73,8 @@ const teams = useTeamsStore()
 const transcript = ref<HTMLElement | null>(null)
 const verbosity = useVerbosity()
 const blocks = computed(() => transcriptBlocks(props.messages, verbosity.value))
+/** Every call's result, whatever the level shows — a spawn row reads its evaluation from it. */
+const results = computed(() => resultsByCall(props.messages))
 const live = computed(() => {
   let start = 0
   if (props.chat) {
@@ -117,6 +123,36 @@ function toolNames(block: Extract<TranscriptBlock, { type: 'tools' }>): string {
  */
 const RESULT_CLASS =
   'max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-sm bg-inset px-2 py-1 font-mono text-small'
+
+/** Whether every call in a block started a subagent — its fold then wears the robot too. */
+function onlySpawns(block: Extract<TranscriptBlock, { type: 'tools' }>): boolean {
+  const own = block.entries.filter((entry) => entry.message.kind === 'tool_use')
+  return own.length > 0 && own.every((entry) => isSubagentSpawn(entry.message))
+}
+
+/**
+ * What Effort Solver decided for each `spawn_subagent` call (§10.3), by the call's message id,
+ * read from the call's result. `pending` while the run is live and nothing has answered — the
+ * evaluation runs before the tool returns, so that is exactly when it is being computed. A
+ * call whose result is an error or carries no scores (written before they were returned) has
+ * no entry, and its row draws nothing.
+ */
+const evaluations = computed(() => {
+  const live = props.chat ? props.chat.running : props.taskStatus === 'in_progress'
+  const found = new Map<string, ReturnType<typeof spawnEffortSolver> | 'pending'>()
+  for (const message of props.messages) {
+    if (!isSubagentSpawn(message)) continue
+    const id = message.data?.id
+    const result = typeof id === 'string' ? results.value.get(id) : undefined
+    if (!result) {
+      if (live) found.set(message.id, 'pending')
+      continue
+    }
+    const evaluation = result.data?.is_error ? null : spawnEffortSolver(result.text)
+    if (evaluation) found.set(message.id, evaluation)
+  }
+  return found
+})
 
 function lastTime(block: Extract<TranscriptBlock, { type: 'tools' }>): string {
   const last = block.entries.at(-1)
@@ -212,10 +248,14 @@ useResizeObserver(transcript, () => {
       <TranscriptFold
         v-else-if="block.type === 'tools'"
         :open="isOpen(block.key)"
-        :label="t('taskDetail.transcript.toolsUsed', { count: block.calls })"
+        :label="t(block.studio ? 'taskDetail.transcript.studioToolsUsed' : 'taskDetail.transcript.toolsUsed', { count: block.calls })"
+        :studio="block.studio"
         @toggle="toggle(block.key)"
       >
-        <template #icon><Wrench class="size-3.5 shrink-0" /></template>
+        <template #icon>
+          <Bot v-if="block.studio && onlySpawns(block)" class="size-3.5 shrink-0 text-violet-400" />
+          <Wrench v-else class="size-3.5 shrink-0" :class="block.studio ? 'text-violet-400' : ''" />
+        </template>
         <template #summary>{{ toolNames(block) }}</template>
         <template #meta>{{ lastTime(block) }}</template>
         <div class="space-y-1">
@@ -227,6 +267,11 @@ useResizeObserver(transcript, () => {
               :title="toolSubject(entry.message)"
             >
               <FilePen v-if="isFileEdit(entry.message)" class="size-3 shrink-0 translate-y-0.5" />
+              <Bot
+                v-else-if="isSubagentSpawn(entry.message)"
+                class="size-3 shrink-0 translate-y-0.5 text-violet-400"
+                data-subagent-spawn
+              />
               <GraduationCap
                 v-else-if="isSkillCall(entry.message)"
                 class="size-3 shrink-0 translate-y-0.5"
@@ -256,6 +301,20 @@ useResizeObserver(transcript, () => {
               <span class="min-w-0 truncate">{{ tailLine(entry.message) }}</span>
               <span class="ml-auto shrink-0">{{ formatTime(entry.message.created_at) }}</span>
             </p>
+            <!-- A subagent's launch carries the Effort Solver evaluation that chose its
+                 effort (§10.3), right under the call, at every level. -->
+            <p
+              v-if="evaluations.get(entry.message.id) === 'pending'"
+              class="vxs-task-activity ml-5 text-faint"
+            >
+              {{ t('effortSolver.evaluating') }}
+            </p>
+            <EffortSolverResult
+              v-else-if="evaluations.get(entry.message.id)"
+              :data="evaluations.get(entry.message.id) as Record<string, unknown>"
+              class="ml-5 max-w-sm"
+              data-spawn-evaluation
+            />
             <pre
               v-for="result in entry.results"
               :key="result.id"
@@ -340,7 +399,7 @@ useResizeObserver(transcript, () => {
         <span class="ml-auto shrink-0">{{ formatTime(block.message.created_at) }}</span>
       </p>
 
-      <EffortSolverResult v-else-if="chat && block.message.kind === 'effort_solver'" :data="block.message.data" />
+      <EffortSolverResult v-else-if="block.message.kind === 'effort_solver'" :data="block.message.data" />
       <ProducerCompaction v-else-if="chat && block.message.kind === 'producer_compacted'" :message="block.message" />
 
       <!-- A summary that came with a result type (§10.4) wears its colour: the edge and

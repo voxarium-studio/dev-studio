@@ -113,7 +113,7 @@ async def test_auto_uses_solver_even_for_stale_toolsets_and_explicit_choices(pro
     assert not result.get("is_error"), result
     async with producer.db.session() as session:
         task = (await session.exec(select(TeamTask))).one()
-    assert task.effort == "xhigh"
+    assert task.effort == "high"
     assert len(solver.requests) == 1
     assert solver.requests[0].member.id == SOLVER
     assert "Implement movement" in solver.requests[0].prompt
@@ -123,18 +123,19 @@ async def test_auto_uses_solver_even_for_stale_toolsets_and_explicit_choices(pro
     assert len(messages) == 1
     assert messages[0].text == ""
     assert messages[0].data["scores"] == SCORES
-    assert messages[0].data["effort"] == 4
-    assert messages[0].data["effort_level"] == "xhigh"
+    assert messages[0].data["effort"] == 3
+    assert messages[0].data["effort_level"] == "high"
     assert all("Private assessment" not in message.text for message in await producer.chats.messages(chat.id))
 
 
-@pytest.mark.parametrize("mode, expected", [("agent", "high"), ("auto", "xhigh")])
+@pytest.mark.parametrize("mode, expected", [("agent", "medium"), ("auto", "high")])
 async def test_task_execution_uses_agent_default_or_solver_effort(producer, solver, mode, expected):
     chat = await opened(producer)
     await producer.chats.producer.set_effort_mode(chat.id, mode)
     async with producer.db.session() as session:
         member = await session.get(TeamMember, DEV)
-        member.effort = "high"
+        # Not the level the solver computes, so the two sources stay distinguishable.
+        member.effort = "medium"
         session.add(member)
     tools = await tools_for(producer, chat)
     result = await tools["create_task"]({"assignee_id": DEV, "title": "Implement movement",
@@ -142,7 +143,7 @@ async def test_task_execution_uses_agent_default_or_solver_effort(producer, solv
     assert not result.get("is_error"), result
     async with producer.db.session() as session:
         task = (await session.exec(select(TeamTask))).one()
-    assert task.effort == ("xhigh" if mode == "auto" else None)
+    assert task.effort == ("high" if mode == "auto" else None)
     assert len(solver.requests) == (1 if mode == "auto" else 0)
     await allow(producer, task)
     await producer.teams.start_task(task.id)
@@ -166,9 +167,9 @@ async def test_each_new_task_reads_the_solvers_current_weights(producer, solver)
     assert len(solver.requests) == 2
     async with producer.db.session() as session:
         tasks = list((await session.exec(select(TeamTask).order_by(TeamTask.number))).all())
-    assert [task.effort for task in tasks] == ["xhigh", "medium"]
+    assert [task.effort for task in tasks] == ["high", "medium"]
     assert [message.data["effort"] for message in await producer.chats.messages(chat.id)
-            if message.kind == "effort_solver"] == [4, 2]
+            if message.kind == "effort_solver"] == [3, 2]
 
 
 async def test_successful_evaluations_add_usage_once_to_chat_without_exposing_raw_telemetry(producer, solver):

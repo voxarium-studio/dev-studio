@@ -196,7 +196,7 @@ def present(parts: list[dict], reported: int | None, window: int | None, *,
     for index, part in enumerate(parts):
         text = part["text"]
         # The explicit live inspection is a one-time report; keep its supplied
-        # metadata readable without repeating a provider call when a tile is opened.
+        # metadata readable without repeating a runtime call when a tile is opened.
         if basis != "runtime":
             text = text[:min(32_000, budget)]
             budget -= len(text)
@@ -291,3 +291,90 @@ def native_inventory(report: dict) -> dict[str, Any]:
         raise ValueError("The runtime context categories exceed its reported total")
     return present(parts, total, count(report.get("rawMaxTokens")) or count(report.get("maxTokens")),
                    origin="claude_code_runtime", partial=False, captured_at=utcnow().isoformat(), basis="runtime")
+
+
+_QWEN_ROW = re.compile(r"(?P<indent>\s*(?:└ )?)(?P<label>\S.*?)\s+(?P<size>\d+(?:\.\d+)?[km]?) tokens \(\d+(?:\.\d+)?%\)")
+_QWEN_CATEGORIES = {
+    "system prompt": "system", "built-in tools": "tool_definitions", "mcp tools": "tool_definitions",
+    "instruction files": "memory", "memory files": "memory", "auto memory": "memory",
+    "skills": "skills", "startup context": "runtime", "messages": "history",
+}
+# Totals and capacity, plus the remainder Qwen 0.26 printed: Studio derives its own from "Used".
+_QWEN_NOT_SOURCES = {"used", "free", "unattributed"}
+
+
+def _qwen_size(text: str) -> tuple[int, int]:
+    """A printed count and how far rounding to one decimal may have moved it."""
+    scale = {"k": 1_000, "m": 1_000_000}.get(text[-1], 1)
+    return round(float(text.rstrip("km")) * scale), scale // 20
+
+
+def qwen_inventory(report: str) -> dict[str, Any]:
+    """Qwen's `/context detail` text, as printed in headless mode (§10.4).
+
+    The CLI prints rounded counts (`12.3k`), so a category is only split into its rows
+    when they fit inside it within that rounding. Nothing here is re-estimated by Studio.
+    """
+    categories: list[tuple[int, str, str, int, int]] = []
+    details: dict[str, list[tuple[int, str, str, int, int]]] = {}
+    section = ""
+    owner = ""
+    for index, line in enumerate(report.splitlines()):
+        heading = re.fullmatch(r"\*\*(.+)\*\*", line.strip())
+        if heading:
+            section = heading[1].lower()
+            continue
+        row = _QWEN_ROW.fullmatch(line)
+        if not row:
+            continue
+        label = row["label"]
+        tokens, slack = _qwen_size(row["size"])
+        if "└" not in row["indent"]:
+            categories.append((index, line.strip(), label, tokens, slack))
+        elif section in _QWEN_CATEGORIES:
+            if len(row["indent"]) > 4:  # "body loaded" under the skill that owns it
+                label = f"{owner} · {label}"
+            else:
+                owner = label
+            details.setdefault(section, []).append((index, line.strip(), label, tokens, slack))
+
+    def fragment(category, row, kind, group):
+        index, text, label, tokens, _ = row
+        return {**source(category, text, label, origin=f"runtime.context[{index}]",
+                         representation="metadata", source_kind=kind,
+                         source_detail=label if kind == "sdk_category" else f"{group} · {label}",
+                         provided_by="qwen" if group.lower() == "built-in tools" else None),
+                "tokens": tokens}
+
+    parts = []
+    reported = None
+    for row in categories:
+        _, _, name, tokens, slack = row
+        key = name.lower()
+        if key == "used":
+            reported = tokens
+        if key in _QWEN_NOT_SOURCES or not tokens:
+            continue
+        category = _QWEN_CATEGORIES.get(key, "runtime")
+        rows = details.get(key, [])
+        listed = sum(item[3] for item in rows)
+        slack += sum(item[4] for item in rows)
+        if not rows or listed > tokens + slack:
+            parts.append(fragment(category, row, "sdk_category", name))
+            continue
+        parts.extend(fragment(category, item, "sdk_entry", name) for item in rows if item[3])
+        if tokens - listed > slack:
+            # What the category holds besides its rows, e.g. the skill tool's own schema.
+            parts.append(fragment(category, (*row[:3], tokens - listed, 0), "sdk_category", name))
+    if not parts:
+        raise ValueError("Qwen Code returned no context breakdown")
+
+    window = None
+    exact = re.search(r"Effective window:\s+([\d,]+)\s+\(window − ([\d,]+) reserve\)", report)
+    printed = re.search(r"Context window: (\d+(?:\.\d+)?[km]?) tokens", report)
+    if exact:
+        window = sum(int(group.replace(",", "")) for group in exact.groups())
+    elif printed:
+        window = _qwen_size(printed[1])[0]
+    return present(parts, reported, window, origin="qwen_runtime", partial=False,
+                   captured_at=utcnow().isoformat(), basis="runtime")

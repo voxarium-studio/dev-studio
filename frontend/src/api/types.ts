@@ -1408,7 +1408,6 @@ export interface VcsConfig {
  * back to its default. The defaults themselves come from `GET /api/settings/prompts`.
  */
 export interface AgentPromptsConfig {
-  system_prompt_base: string | null
   identity: string | null
   identity_responsibility: string | null
   identity_manager: string | null
@@ -1420,6 +1419,7 @@ export interface AgentPromptsConfig {
   no_studio_tools: string | null
   docs_location: string | null
   project_memory?: string | null
+  subagents?: string | null
   code_graph: string | null
   isolated_checkout: string | null
   outside_project: string | null
@@ -2206,7 +2206,7 @@ export interface ContextInventory {
   estimated_tokens: number
   captured_at: string | null
   partial: boolean
-  origin: 'studio' | 'codex_journal' | 'claude_code_journal' | 'qwen_journal' | 'claude_code_runtime'
+  origin: 'studio' | 'codex_journal' | 'claude_code_journal' | 'qwen_journal' | 'claude_code_runtime' | 'qwen_runtime'
   /** Local JSONL file supplying the journal view (§10.4). */
   journal_path?: string
   basis: 'estimated' | 'runtime'

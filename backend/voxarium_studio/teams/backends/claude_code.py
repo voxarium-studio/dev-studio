@@ -387,8 +387,8 @@ class ClaudeCodeBackend(AgentBackend):
             model=request.model,
             max_turns=request.max_turns,
             permission_mode=request.permission_mode,
-            # Full replacement (2026-11-12): the Studio-built prompt — System Prompt
-            # Base, Responsibility, identity, run context — is the session's *whole*
+            # Full replacement (2026-11-12): the Studio-built prompt — Responsibility,
+            # identity, run context, all of it from Team Settings — is the session's *whole*
             # system prompt; the stock Claude Code preset is no longer sent underneath.
             # Checked against the bundled CLI with a captured request: `--system-prompt`
             # also discards a `--agent` definition's own prompt, which is why the run's

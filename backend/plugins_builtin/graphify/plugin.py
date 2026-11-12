@@ -3,10 +3,10 @@ Studio (§9.7).
 
 What the plugin owns is three files under ``<launch root>/graphify-out/``: ``graph.json``,
 the code, written by ``graphify extract <path> --code-only``; ``documents/…/graph.json``,
-the Documents section, written by a second extract over ``.voxarium_studio/docs`` through Claude
-Code; and ``merged-graph.json``, the two folded together by ``graphify merge-graphs`` —
-what agents and the search field read. Three things hang off them, and each is one of the
-extension points this plugin was the reason for:
+the Documents section, written by a second extract over ``.voxarium_studio/docs`` through the
+agent CLI the Graphify page names — Claude Code, Codex or Qwen Code (``graphify_runtimes``);
+and ``merged-graph.json``, the two folded together by ``graphify merge-graphs`` — what agents
+and the search field read. Three things hang off them, and each is one of the extension points this plugin was the reason for:
 
 * **Hooks** rebuild them — when the Studio opens the project, and each time a task reaches
   *done*, because that is when the code has changed and the next task will ask about it.
@@ -34,7 +34,6 @@ import asyncio
 import json
 import logging
 import math
-import os
 import re
 import shutil
 import time
@@ -43,6 +42,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+# A sibling module: the loader has the plugin root on sys.path while this file executes.
+import graphify_runtimes as runtimes
 from voxarium_studio.plugin_api import (
     AutomationCancelled,
     Event,
@@ -66,23 +67,28 @@ the tag is the name of the directory two levels above a ``graph.json``, and the 
 DOCUMENTS_TAG = DOCUMENTS_OUT_DIRNAME
 DEFAULT_EXECUTABLE = "graphify"
 DEFAULT_SCAN_PATH = "."
-DEFAULT_DOCUMENTS_MODEL = "haiku"
+DEFAULT_DOCUMENTS_BACKEND = runtimes.DEFAULT_RUNTIME
+DEFAULT_DOCUMENTS_MODEL = runtimes.RUNTIMES[runtimes.DEFAULT_RUNTIME].default_model
 DEFAULT_DOCUMENTS_LANGUAGE = "source"
 
 #: What the model reading the documents is told about language, per setting. graphify's
 #: own extraction prompt says nothing about it, and left alone the model translates every
-#: label into English — a Russian design document then answers only English queries. The
-#: instruction reaches ``claude -p`` as project memory: a ``CLAUDE.md`` in the directory
-#: the documents pass runs from, which Claude Code loads like any project's. (A wrapper
-#: adding ``--append-system-prompt`` was the first idea; a ``.cmd`` shim on Windows breaks
-#: on the quotes in graphify's ``--json-schema`` argument — cmd.exe has no escape for
-#: them — and graphify offers no other hook.) Node ids stay ASCII either way: graphify's
-#: id format requires it, and it is labels people search by.
+#: label into English — a Russian design document then answers only English queries.
+#:
+#: How the rule reaches the model depends on the runtime. ``claude -p`` gets it as project
+#: memory: a ``CLAUDE.md`` in the directory the documents pass runs from, which Claude Code
+#: loads like any project's. (A wrapper adding ``--append-system-prompt`` was the first
+#: idea; a ``.cmd`` shim on Windows breaks on the quotes in graphify's ``--json-schema``
+#: argument — cmd.exe has no escape for them — and graphify offers no other hook.) Codex
+#: and Qwen Code are answered by the Studio's own endpoint, which appends the rule to every
+#: system prompt (``graphify_runtimes.DocumentsEndpoint``). Either way graphify's prompt —
+#: what its semantic cache is keyed on — is untouched. Node ids stay ASCII: graphify's id
+#: format requires it, and it is labels people search by.
 LANGUAGE_MEMORY: dict[str, str] = {
     "source": (
         "# LANGUAGE RULE FOR THE EXTRACTION OUTPUT (mandatory — overrides any example in the task)\n\n"
-        "Voxarium Studio runs `claude -p` here on graphify's behalf to read the team's "
-        "documents. The JSON you output describes those documents, and every `label` — of a "
+        "Voxarium Studio asks you, on graphify's behalf, to read the team's documents. "
+        "The JSON you output describes those documents, and every `label` — of a "
         "node and of a hyperedge — and every `rationale` MUST be written in the language the "
         "source document is written in: Russian source text gives Russian labels and "
         "rationales, English gives English, and a document that mixes the two gets each "
@@ -95,8 +101,8 @@ LANGUAGE_MEMORY: dict[str, str] = {
     ),
     "english": (
         "# LANGUAGE RULE FOR THE EXTRACTION OUTPUT (mandatory — overrides any example in the task)\n\n"
-        "Voxarium Studio runs `claude -p` here on graphify's behalf to read the team's "
-        "documents. Every `label` — of a node and of a hyperedge — and every `rationale` "
+        "Voxarium Studio asks you, on graphify's behalf, to read the team's documents. "
+        "Every `label` — of a node and of a hyperedge — and every `rationale` "
         "MUST be written in English, whatever language the document is written in. Keep a "
         "proper name or a term the document gives in another language in parentheses after "
         "the English: «Toa Norrington (Тоа Норрингтон)». The `id` fields stay ASCII "
@@ -108,7 +114,10 @@ LOG_TAIL = 120
 QUERY_TIMEOUT = 90.0
 QUERY_BUDGET = 1500
 INSTALL_HINT = "uv tool install graphifyy"
-CLAUDE_HINT = "install Claude Code and run `claude` once to sign in"
+CLAUDE_HINT = runtimes.RUNTIMES[runtimes.CLAUDE_CODE].hint
+#: What graphify needs installed to reach the Studio's endpoint (``--backend openai``).
+OPENAI_EXTRA_HINT = 'uv tool install "graphifyy[openai]" --force'
+_MISSING_PACKAGE = re.compile(r"the '([\w.-]+)' package is required for this backend")
 
 #: What the documents pass does *not* send to the model even inside the Documents folder:
 #: a picture pasted into a document is a vision call the team's writing does not need, and
@@ -274,15 +283,36 @@ def documents_enabled(settings: dict[str, Any]) -> bool:
     return _flag(settings, "documents", True)
 
 
+def documents_runtime(settings: dict[str, Any]) -> runtimes.Runtime:
+    """The agent CLI the documents are read through (``documents_backend``).
+
+    A configuration saved before the page could choose one has a model and no backend;
+    that model was a Claude Code one, so no backend reads as Claude Code — the behaviour
+    it was saved under.
+    """
+    return runtimes.runtime_of(settings.get("documents_backend"))
+
+
+def documents_backend(settings: dict[str, Any]) -> str:
+    return documents_runtime(settings).id
+
+
 def documents_model(settings: dict[str, Any]) -> str:
-    """The model ``claude -p`` reads the documents with — an alias or a full id."""
-    return _text(settings, "documents_model", DEFAULT_DOCUMENTS_MODEL)
+    """The model the documents are read with — an alias or a full id; ``""`` is the CLI's
+    own configured model (Codex and Qwen Code by default). A model that belongs to another
+    runtime is dropped for the runtime's default rather than handed to a CLI that cannot
+    run it."""
+    return runtimes.model_for(documents_runtime(settings), settings.get("documents_model"))
 
 
 def documents_language(settings: dict[str, Any]) -> str:
     """``source`` — labels in the document's own language — or ``english``."""
     choice = _text(settings, "documents_language", DEFAULT_DOCUMENTS_LANGUAGE).lower()
     return choice if choice in LANGUAGE_MEMORY else DEFAULT_DOCUMENTS_LANGUAGE
+
+
+def language_rule(choice: str) -> str:
+    return LANGUAGE_MEMORY[choice]
 
 
 def write_language_memory(directory: Path, choice: str) -> Path:
@@ -367,12 +397,15 @@ def extract_command(
 
 
 def documents_command(settings: dict[str, Any], launch_root: Path, docs: Path) -> list[str]:
-    """The documents pass: ``.voxarium_studio/docs/`` alone, through Claude Code, into its own graph.
+    """The documents pass: ``.voxarium_studio/docs/`` alone, through the chosen agent CLI,
+    into its own graph.
 
     graphify indexes documents only semantically — a model reads them and names the
     concepts, decisions and entities inside — so this is the run that costs something.
-    ``--backend claude-cli`` routes it through the ``claude`` command on the user's own
-    subscription rather than an API key.
+    Claude Code is graphify's own ``--backend claude-cli``: the ``claude`` command on the
+    user's subscription. Codex and Qwen Code are ``--backend openai`` pointed at the
+    Studio's endpoint for the pass (``graphify_runtimes``), with a request timeout fit for
+    an agent run rather than an API call and fewer chunks at once.
 
     Its scan root is the Documents folder and its ``--out`` is a folder of its own, and the
     two go together: graphify prunes from a graph every node whose file the scan no longer
@@ -387,9 +420,18 @@ def documents_command(settings: dict[str, Any], launch_root: Path, docs: Path) -
         str(docs),
         "--out",
         str(documents_out(launch_root)),
-        "--backend",
-        "claude-cli",
     ]
+    if documents_runtime(settings).native:
+        command += ["--backend", "claude-cli"]
+    else:
+        command += [
+            "--backend",
+            "openai",
+            "--api-timeout",
+            str(runtimes.API_TIMEOUT_SECONDS),
+            "--max-concurrency",
+            str(runtimes.CONCURRENCY),
+        ]
     for pattern in DOCUMENT_EXCLUDES:
         command.extend(["--exclude", pattern])
     return command
@@ -413,8 +455,23 @@ def merge_command(settings: dict[str, Any], launch_root: Path) -> list[str]:
 
 
 def claude_executable() -> str | None:
-    """Where ``claude`` is, or ``None`` — the documents pass has nothing to read with."""
+    """Where ``claude`` is, or ``None``."""
     return shutil.which("claude") or shutil.which("claude.cmd")
+
+
+def documents_launcher(runtime: runtimes.Runtime) -> list[str] | None:
+    """How the chosen CLI is started, or ``None`` — the documents pass has nothing to read
+    with. Codex and Qwen Code are found as the Teams backends find them."""
+    if runtime.id == runtimes.CLAUDE_CODE:
+        found = claude_executable()
+        return [found] if found else None
+    return runtimes.launcher(runtime)
+
+
+def documents_cli(settings: dict[str, Any]) -> str | None:
+    """The chosen CLI's executable, for the page."""
+    found = documents_launcher(documents_runtime(settings))
+    return found[-1] if found else None
 
 
 def subprocess_env(settings: dict[str, Any] | None = None) -> dict[str, str]:
@@ -425,20 +482,14 @@ def subprocess_env(settings: dict[str, Any] | None = None) -> dict[str, str]:
     arrives together at exit, and the bar sits at 0% until it jumps to 100%. Unbuffered,
     each line lands as it is printed, which is what makes the percent live.
 
-    ``CLAUDECODE`` is dropped because the documents pass runs ``claude -p``, and a Studio
-    started from inside a Claude Code terminal inherits that variable — which makes the
-    nested ``claude`` refuse to start. The Studio is not that session; its children are not
-    nested in it.
+    Every agent CLI's nested-session marker is dropped (``CLAUDECODE`` and the like,
+    ``graphify_runtimes.NESTED_MARKERS``) because the documents pass runs one of those CLIs,
+    and a Studio started from inside such a session inherits them — a nested ``claude``
+    refuses to start. The Studio is not that session; its children are not nested in it.
     """
-    env = {
-        **os.environ,
-        "PYTHONIOENCODING": "utf-8",
-        "PYTHONUNBUFFERED": "1",
-        "GRAPHIFY_NO_TIPS": "1",
-    }
-    env.pop("CLAUDECODE", None)
-    env.pop("CLAUDE_CODE_ENTRYPOINT", None)
-    if settings is not None:
+    env = runtimes.child_environment()
+    env.update(PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1", GRAPHIFY_NO_TIPS="1")
+    if settings is not None and documents_runtime(settings).id == runtimes.CLAUDE_CODE:
         env["GRAPHIFY_CLAUDE_CLI_MODEL"] = documents_model(settings)
     return env
 
@@ -807,8 +858,8 @@ async def _extract_once(
     force: bool = False,
     preface: tuple[str, ...] = (),
 ) -> None:
-    """One run: the code pass, then — when it is on and ``claude`` is there — the documents
-    pass, on one bar. The code pass is what the graph cannot do without, so it goes first
+    """One run: the code pass, then — when it is on and the chosen CLI is there — the
+    documents pass, on one bar. The code pass is what the graph cannot do without, so it goes first
     and a documents pass that fails leaves the code graph it just wrote standing."""
     settings = host.settings
     launch_root = host.launch_root
@@ -825,9 +876,11 @@ async def _extract_once(
 
     with_documents = documents_enabled(settings)
     docs = documents_dir(host)
+    runtime = documents_runtime(settings)
+    prefix = documents_launcher(runtime) if with_documents else None
     skipped = None
-    if with_documents and claude_executable() is None:
-        skipped = f"the `claude` command is not on PATH — {CLAUDE_HINT}"
+    if with_documents and prefix is None:
+        skipped = f"the `{runtime.command}` command is not on PATH — {runtime.hint}"
         with_documents = False
     elif with_documents and not documents_present(docs):
         skipped = f"there are no documents in {docs} yet"
@@ -861,22 +914,8 @@ async def _extract_once(
         command = extract_command(settings, launch_root, force=force)
         ok = await _run_pass(host, indexer, resolved, command, phase="code", band=code_band)
         if ok and with_documents:
-            language = documents_language(settings)
-            indexer.log.append(
-                f"[voxarium_studio] reading the documents in {docs} through Claude Code, labels "
-                + ("in the document's own language" if language == "source" else "in English")
-            )
-            indexer.documents["ran"] = True
-            # The pass runs *from* its out directory so that the CLAUDE.md written there is
-            # the project memory `claude -p` picks up — that is how the language rule
-            # reaches the model. Everything on the command line is absolute, so graphify
-            # itself does not care where it runs.
-            workdir = documents_out(launch_root)
-            write_language_memory(workdir, language)
-            command = documents_command(settings, launch_root, docs)
-            ok = await _run_pass(
-                host, indexer, resolved, command, phase="documents", band=DOCUMENTS_BAND, cwd=workdir
-            )
+            assert prefix is not None
+            ok = await _documents_pass(host, indexer, resolved, runtime, prefix, docs)
         if ok:
             ok = await _combine(host, indexer, resolved)
         if ok:
@@ -894,6 +933,76 @@ async def _extract_once(
             log.warning("graphify: %s", indexer.error)
         else:
             log.info("graphify: index updated at %s", graph_file(launch_root))
+
+
+async def _documents_pass(
+    host: PluginHost,
+    indexer: Indexer,
+    resolved: str,
+    runtime: runtimes.Runtime,
+    prefix: list[str],
+    docs: Path,
+) -> bool:
+    """The documents pass through ``runtime``; ``True`` when graphify exited 0."""
+    settings = host.settings
+    launch_root = host.launch_root
+    language = documents_language(settings)
+    model = documents_model(settings)
+    indexer.log.append(
+        f"[voxarium_studio] reading the documents in {docs} through {runtime.label}"
+        + (f" ({model})" if model else " (its default model)")
+        + ", labels "
+        + ("in the document's own language" if language == "source" else "in English")
+    )
+    indexer.documents["ran"] = True
+    # The pass runs *from* its out directory. For Claude Code that is what puts the
+    # CLAUDE.md written there in front of `claude -p` as project memory; everything on the
+    # command line is absolute, so graphify itself does not care where it runs.
+    workdir = documents_out(launch_root)
+    command = documents_command(settings, launch_root, docs)
+    if runtime.native:
+        write_language_memory(workdir, language)
+        return await _run_pass(
+            host, indexer, resolved, command, phase="documents", band=DOCUMENTS_BAND, cwd=workdir
+        )
+    workdir.mkdir(parents=True, exist_ok=True)
+    endpoint = runtimes.DocumentsEndpoint(
+        runtimes.runner_for(runtime, prefix, model),
+        model=model,
+        rule=language_rule(language),
+        label=runtime.label,
+        on_line=lambda line: indexer.log.append(f"[voxarium_studio] {line}"),
+    )
+    async with endpoint:
+        indexer.log.append(
+            f"[voxarium_studio] {runtime.label} answers graphify at {endpoint.base_url} for this pass"
+        )
+        ok = await _run_pass(
+            host,
+            indexer,
+            resolved,
+            command,
+            phase="documents",
+            band=DOCUMENTS_BAND,
+            cwd=workdir,
+            extra_env=endpoint.graphify_env(),
+        )
+    if not ok or endpoint.answered == 0:
+        # graphify reports a missing SDK per chunk and may still exit 0 with nothing read;
+        # the line names the package, and the fix is graphify's own extra.
+        missing = next(
+            (match.group(1) for line in indexer.log if (match := _MISSING_PACKAGE.search(line))), None
+        )
+        if missing:
+            problem = (
+                f"graphify lacks the '{missing}' package it needs to reach {runtime.label} through "
+                f"the Studio — install it with `{OPENAI_EXTRA_HINT}`"
+            )
+            indexer.documents["error"] = problem
+            indexer.error = f"documents: {problem}"
+            indexer.log.append(f"[voxarium_studio] {problem}")
+            return False
+    return ok
 
 
 async def _combine(host: PluginHost, indexer: Indexer, resolved: str) -> bool:
@@ -933,6 +1042,7 @@ async def _run_pass(
     phase: str,
     band: tuple[float, float],
     cwd: Path | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> bool:
     """Run one ``graphify extract`` and follow its output; ``True`` when it exited 0.
 
@@ -956,7 +1066,7 @@ async def _run_pass(
             resolved,
             *command[1:],
             cwd=str(launch_root),
-            env=subprocess_env(settings),
+            env={**subprocess_env(settings), **(extra_env or {})},
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
@@ -1379,6 +1489,7 @@ def graph_status(host: PluginHost) -> dict[str, Any]:
 async def action_status(host: PluginHost, _payload: dict[str, Any]) -> dict[str, Any]:
     """Everything the settings page shows: the CLI, the graph, the last run."""
     settings = host.settings
+    runtime = documents_runtime(settings)
     index = await graph_index(host)
     del index  # loaded for the counts `graph_status` reads from the cache
     return {
@@ -1392,9 +1503,16 @@ async def action_status(host: PluginHost, _payload: dict[str, Any]) -> dict[str,
         "documents_command": documents_command(settings, host.launch_root, documents_dir(host)),
         "merge_command": merge_command(settings, host.launch_root),
         "documents": documents_enabled(settings),
+        "documents_backend": runtime.id,
+        "documents_backend_label": runtime.label,
         "documents_model": documents_model(settings),
         "documents_language": documents_language(settings),
-        "documents_memory": str(documents_out(host.launch_root) / "CLAUDE.md"),
+        "documents_memory": str(documents_out(host.launch_root) / "CLAUDE.md") if runtime.native else None,
+        "documents_endpoint": not runtime.native,
+        "documents_extra_hint": None if runtime.native else OPENAI_EXTRA_HINT,
+        "documents_cli": documents_cli(settings),
+        "documents_cli_command": runtime.command,
+        "documents_cli_hint": runtime.hint,
         "claude": claude_executable(),
         "claude_hint": CLAUDE_HINT,
         "index_on_open": _flag(settings, "index_on_open", True),
@@ -1439,7 +1557,7 @@ async def action_reset(host: PluginHost, _payload: dict[str, Any]) -> dict[str, 
     """Stop whatever runs, wipe ``graphify-out/`` at the launch root, index from scratch.
 
     Everything goes: the code graph, the documents graph and its semantic cache — so every
-    document is read through Claude Code again, which is what the page's warning says —
+    document is read through the chosen agent CLI again, which is what the page's warning says —
     the merged graph, the manifests, the AST cache. The answer is immediate; the removal
     and the fresh run follow in the background and report as events like any run.
     """

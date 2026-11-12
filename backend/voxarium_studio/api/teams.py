@@ -928,7 +928,8 @@ async def get_task(team_id: str, task_id: str, ctx: Ctx) -> dict[str, Any]:
     }
 
 
-async def _retained_task_context(team_id: str, task_id: str, ctx: Ctx, view: ContextView) -> tuple[list[dict], dict]:
+async def _retained_task_context(team_id: str, task_id: str, ctx: Ctx, view: ContextView,
+                                 ) -> tuple[list[dict], dict, str | None]:
     """Read the captured context without dispatching an agent or reloading materials (§10.4)."""
     from ..models.task_context import TaskContext
     from .session_context import read_context
@@ -942,15 +943,16 @@ async def _retained_task_context(team_id: str, task_id: str, ctx: Ctx, view: Con
         messages = list((await session.exec(select(AgentMessage).where(
             AgentMessage.task_id == task_id,
         ).order_by(AgentMessage.created_at, AgentMessage.id))).all())
-    return await read_context(snapshot, messages, member, task.agent_session_id, view)
+    parts, metrics = await read_context(snapshot, messages, member, task.agent_session_id, view)
+    return parts, metrics, task.agent_session_id
 
 
 @router.get("/{team_id}/tasks/{task_id}/context")
 async def get_task_context(team_id: str, task_id: str, ctx: Ctx, view: ContextView = "auto") -> dict[str, Any]:
     from .session_context import inventory_response
 
-    parts, metrics = await _retained_task_context(team_id, task_id, ctx, view)
-    return inventory_response(task_id, parts, metrics)
+    parts, metrics, session_id = await _retained_task_context(team_id, task_id, ctx, view)
+    return inventory_response(task_id, parts, metrics, session_id)
 
 
 @router.get("/{team_id}/tasks/{task_id}/context/fragments/{source_id}")
@@ -959,7 +961,7 @@ async def get_context_fragment(team_id: str, task_id: str, source_id: int, ctx: 
                                view: ContextView = "auto") -> dict[str, str]:
     from .session_context import fragment_response
 
-    parts, _ = await _retained_task_context(team_id, task_id, ctx, view)
+    parts, _, _ = await _retained_task_context(team_id, task_id, ctx, view)
     return fragment_response(parts, source_id, key)
 
 
@@ -972,7 +974,7 @@ async def inspect_task_context(team_id: str, task_id: str, ctx: Ctx) -> dict[str
         task = await session.get(TeamTask, task_id)
         if task is None or task.team_id != team_id:
             raise HTTPException(status_code=404, detail=f"No task {task_id!r}")
-    return await inspect_session(task_id)
+    return await inspect_session(task_id, task.agent_session_id)
 
 
 @router.patch("/{team_id}/tasks/{task_id}")

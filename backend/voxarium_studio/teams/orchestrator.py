@@ -2601,6 +2601,12 @@ class TeamOrchestrator:
             # Says so in the transcript when the run has to queue behind `concurrency.agents`:
             # the task already reads In progress, and a silent wait looks like a hang.
             async with agent_slot(self.jobs, self.record_message, task_id, member_id) as lease:
+                # §10.3, §10.11: an effort nobody chose ("Auto" on the card) is the Effort
+                # Solver's to pick, once, when the session is about to start — inside this
+                # slot, as the Producer's and a subagent's evaluations are. Failure raises
+                # into the run's error path: no session starts on a substituted default.
+                if request.effort is None and getattr(backend, "supports_effort", True):
+                    request.effort = await self._solve_task_effort(task, member_id)
                 self.subagents.open_run(request, lease, run_id)
                 try:
                     limit = await self._consume(backend, request, task_id, member_id)
@@ -2666,6 +2672,49 @@ class TeamOrchestrator:
                 log.exception("Could not dispatch %s's queue after task %s", member_id, task_id)
             finally:
                 self._ending.discard(task_id)
+
+    async def _solve_task_effort(self, task: TeamTask, member_id: str) -> str:
+        """Score a task left on "Auto" and keep the level as its override (§10.3, §10.11).
+
+        Stored on the row like the Producer's Auto result, so a resume, a continuation or
+        a rerun after review keeps the effort the first run had; putting the slider back on
+        "From member" asks the Solver again at the next start. The scores go into the task's
+        transcript, and the evaluation's spend into the task's totals.
+        """
+        async with self.db.session() as session:
+            solver = await session.get(TeamMember, f"{task.team_id}__{EFFORT_SOLVER_ID}")
+        if solver is None:
+            raise RuntimeError("The built-in Effort Solver is missing. Reload the team and retry.")
+        try:
+            solution = await solve_effort(
+                solver, task.title, task.brief, max_message_bytes=self.config.teams.max_message_bytes,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"Effort Solver could not choose this task's effort: {exc}") from exc
+        # Tokens and cost only: the task's `num_turns` means "a session has worked here" and
+        # decides whether a fresh start is handed the saved history (§10.6).
+        spent = {key: int(solution.usage.get(key) or 0) for key in (
+            "total_tokens", "total_uncached_tokens", "total_cached_tokens",
+            "total_input_tokens", "total_output_tokens",
+        )}
+        cost = float(solution.usage.get("total_cost_usd") or 0)
+        async with self.db.session() as session:
+            await session.exec(update(TeamTask).where(TeamTask.id == task.id).values(
+                effort=solution.effort_level,
+                total_cost_usd=TeamTask.total_cost_usd + cost,
+                **{key: getattr(TeamTask, key) + value for key, value in spent.items()},
+            ))
+        task.effort = solution.effort_level
+        await self.record_message(
+            task.id, member_id, role="system", kind="effort_solver",
+            text=f"Effort Solver set this task's effort to {solution.effort_level}.",
+            data={"scores": solution.scores.model_dump(), "effort": solution.effort,
+                  "effort_level": solution.effort_level},
+        )
+        await self._publish_task_changed(task.id)
+        return solution.effort_level
 
     async def _consume(
         self, backend: Any, request: AgentRunRequest, task_id: str, member_id: str
@@ -4137,6 +4186,11 @@ def _build_system_prompt(
 
     if memory is not None:
         say("project_memory", entries=memory)
+
+    # §10.3: only a task has subagents — `spawn_subagent` refuses a chat, which has no
+    # task to split — and only with the Studio's tools is there anything to start one with.
+    if has_studio_tools and not chat:
+        say("subagents")
 
     # Absolute, because an isolated checkout starts the session somewhere the CLI's
     # default `graphify-out/graph.json` is not (§9.7): the graph describes the main

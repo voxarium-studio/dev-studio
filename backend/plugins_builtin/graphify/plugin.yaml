@@ -7,12 +7,13 @@ description: >
   classes, calls, imports, and what the team wrote about them — at the agent launch root,
   and makes it searchable from the rail. The index is rebuilt when the project is opened
   and each time a task finishes: the code from the local AST alone, no model, no API key;
-  the Documents section (.voxarium_studio/docs) read through Claude Code on your own subscription,
-  changed documents only, into a graph of its own that is merged with the code's for
-  agents and search. Agents are told to
-  query the graph before grepping (Settings → Agent prompts → Code graph). Needs the
-  `graphify` command on PATH — `uv tool install graphifyy` — and `claude` for the
-  documents.
+  the Documents section (.voxarium_studio/docs) read through the agent CLI chosen on the
+  Graphify page — Claude Code, Codex or Qwen Code — on your own subscription, changed
+  documents only, into a graph of its own that is merged with the code's for agents and
+  search. Agents are told to query the graph before grepping (Settings → Agent prompts →
+  Code graph). Needs the `graphify` command on PATH — `uv tool install graphifyy` — and
+  the chosen CLI for the documents; Codex and Qwen Code also need graphify's openai extra
+  (`uv tool install "graphifyy[openai]"`).
 enabled_by_default: true
 skills:
   - skills/graphify

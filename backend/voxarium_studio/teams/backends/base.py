@@ -485,6 +485,44 @@ def live_session(task_id: str) -> SessionControl | None:
     return _LIVE_SESSIONS.get(task_id)
 
 
+@runtime_checkable
+class ContextInspector(Protocol):
+    """Asks a runtime that keeps no process between turns for its own context report (§10.4).
+
+    The counterpart of ``SessionControl.get_context_usage`` for a backend whose session is
+    a saved journal rather than a live process: the inspector outlives the run and reopens
+    that session for one local command. ``ready`` is False while a turn is in flight —
+    two processes must not hold one session.
+    """
+
+    session_id: str | None
+
+    @property
+    def ready(self) -> bool: ...
+
+    async def context_report(self) -> str: ...
+
+
+#: Keyed like ``_LIVE_SESSIONS``, but kept after the run: bounded, oldest dropped first.
+_CONTEXT_INSPECTORS: dict[str, ContextInspector] = {}
+_MAX_CONTEXT_INSPECTORS = 256
+
+
+def register_context_inspector(key: str, inspector: ContextInspector) -> None:
+    _CONTEXT_INSPECTORS.pop(key, None)
+    _CONTEXT_INSPECTORS[key] = inspector
+    while len(_CONTEXT_INSPECTORS) > _MAX_CONTEXT_INSPECTORS:
+        _CONTEXT_INSPECTORS.pop(next(iter(_CONTEXT_INSPECTORS)))
+
+
+def context_inspector(key: str, session_id: str | None) -> ContextInspector | None:
+    """Only for the session the owner is on now: a chat may have moved to another backend."""
+    inspector = _CONTEXT_INSPECTORS.get(key)
+    if inspector is None or not session_id or inspector.session_id != session_id:
+        return None
+    return inspector
+
+
 _BACKENDS: dict[str, Callable[[], AgentBackend]] = {}
 
 

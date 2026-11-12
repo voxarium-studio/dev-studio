@@ -55,10 +55,10 @@ class EffortScores(BaseModel):
 class EffortWeights(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    complexity: float = Field(default=2, ge=0, strict=True, allow_inf_nan=False)
+    complexity: float = Field(default=1.5, ge=0, strict=True, allow_inf_nan=False)
     creativity: float = Field(default=1.5, ge=0, strict=True, allow_inf_nan=False)
     depth: float = Field(default=3, ge=0, strict=True, allow_inf_nan=False)
-    coverage: float = Field(default=2, ge=0, strict=True, allow_inf_nan=False)
+    coverage: float = Field(default=2.5, ge=0, strict=True, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def positive_total(self) -> EffortWeights:
@@ -103,7 +103,7 @@ def calculate_effort(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Calculate a task's Effort (1–5) from JSON scores.")
     parser.add_argument("scores", nargs="?", help="JSON scores; omitted reads standard input")
-    parser.add_argument("--weights", help="JSON weight overrides; defaults to 2, 1.5, 3, 2")
+    parser.add_argument("--weights", help="JSON weight overrides; defaults to 1.5, 1.5, 3, 2.5")
     args = parser.parse_args()
     try:
         weights = json.loads(args.weights) if args.weights is not None else None

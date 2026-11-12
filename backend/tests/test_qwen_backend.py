@@ -13,8 +13,10 @@ from sqlmodel import select
 
 from voxarium_studio.models.teams import AgentChat, AgentMessage, TaskStatus, TeamMember, TeamTask
 from voxarium_studio.teams.backends import qwen
-from voxarium_studio.teams.backends.base import AgentRunRequest, get_backend
+from voxarium_studio.api.session_context import inspect_session, inventory_response
+from voxarium_studio.teams.backends.base import AgentRunRequest, context_inspector, get_backend
 from voxarium_studio.teams.chat import UserContext
+from voxarium_studio.teams.context_viewer import qwen_inventory
 from voxarium_studio.teams.tools import build_toolset
 
 TEAM = "team_default"
@@ -54,6 +56,14 @@ if "--resume" in args and os.environ.get("QWEN_TEST_MISSING"):
                      if os.environ["QWEN_TEST_MISSING"] == "title" else
                      "No saved session found with ID " + session + ".")
     sys.exit(1)
+if record["stdin"] == os.environ.get("QWEN_TEST_ACK"):
+    # A slash command the CLI answers itself: no model turn, only an acknowledgement.
+    for frame in ({"type": "assistant", "session_id": "qwen-session", "message": {"content": [
+                      {"type": "text", "text": "Command executed successfully."}]}},
+                  {"type": "result", "subtype": "success", "is_error": False, "num_turns": 0,
+                   "result": "Command executed successfully."}):
+        sys.stdout.write(json.dumps(frame) + "\n")
+    sys.exit(0)
 sys.stdout.buffer.write(Path(os.environ["QWEN_TEST_STREAM"]).read_bytes())
 sys.stdout.flush()
 sys.stderr.write(os.environ.get("QWEN_TEST_STDERR", ""))
@@ -381,3 +391,153 @@ async def test_chat_recovery_restores_saved_history(ctx, fake, wait_for, monkeyp
         stored = await session.get(AgentChat, chat.id)
     assert stored.agent_session_id == "qwen-session" and stored.error is None
     assert "Make the model blue" in fake.records()[-1]["stdin"]
+
+
+# What `qwen -p "/context -d"` prints headlessly (formatContextUsageText, 0.26–0.27).
+CONTEXT_REPORT = """## Context Usage
+
+Model: qwen3-coder-plus  Context window: 1.0m tokens
+
+  Used                            24.6k tokens (2.5%)
+  └ Cached prefix                 20.0k tokens (2.0%)
+  Free                           925.4k tokens (92.5%)
+
+**Compaction thresholds**
+  Effective window:   980,000  (window − 20,000 reserve)
+  Warn threshold:     900,000
+  Auto threshold:     950,000
+  Hard threshold:     970,000
+  Current tier:       safe
+
+**Usage by category**
+  System prompt                    3.2k tokens (0.3%)
+  Built-in tools                  10.5k tokens (1.1%)
+  MCP tools                         900 tokens (0.1%)
+  Instruction files                 400 tokens (0.0%)
+  Auto memory                         0 tokens (0.0%)
+  Skills                           2.0k tokens (0.2%)
+  Startup context                   300 tokens (0.0%)
+  Messages                         6.1k tokens (0.6%)
+
+**Built-in tools**
+  └ run_shell_command              6.2k tokens (0.6%)
+  └ edit                           4.3k tokens (0.4%)
+
+**MCP tools**
+  └ voxarium_studio__list_tasks     600 tokens (0.1%)
+  └ voxarium_studio__get_task       500 tokens (0.1%)
+
+**Instruction files**
+  └ QWEN.md                         400 tokens (0.0%)
+
+**Skills**
+  └ studio                          300 tokens (0.0%)
+    └ body loaded                  1.2k tokens (0.1%)
+  └ review                          100 tokens (0.0%)"""
+CONTEXT_FRAMES = [
+    {"type": "system", "subtype": "init", "session_id": "qwen-session"},
+    {"type": "assistant", "message": {"content": [{"type": "text", "text": CONTEXT_REPORT}]}},
+    {"type": "result", "subtype": "success", "is_error": False, "num_turns": 0,
+     "result": CONTEXT_REPORT},
+]
+STUDIO_VIEW = {"reported": None, "window": None, "origin": "studio", "partial": True}
+
+
+def test_context_report_keeps_runtime_counts_and_splits_only_what_fits():
+    view = qwen_inventory(CONTEXT_REPORT)
+    assert (view["origin"], view["basis"], view["partial"]) == ("qwen_runtime", "runtime", False)
+    assert view["reported_tokens"] == 24_600 and view["context_window"] == 1_000_000
+    sizes = {(p["category"], p["label"]): p["tokens"] for p in view["sources"]}
+    assert sizes[("system", "System prompt")] == 3_200
+    assert sizes[("tool_definitions", "run_shell_command")] == 6_200
+    assert sizes[("history", "Messages")] == 6_100 and sizes[("runtime", "Startup context")] == 300
+    assert sizes[("memory", "QWEN.md")] == 400
+    # Rows that overrun their category are not trusted; the category stays whole.
+    assert sizes[("tool_definitions", "MCP tools")] == 900
+    assert ("tool_definitions", "voxarium_studio__get_task") not in sizes
+    # A skill body is its own row, and the listing overhead is what the rows leave.
+    assert sizes[("skills", "studio · body loaded")] == 1_200
+    assert sizes[("skills", "Skills")] == 400
+    assert not {"Used", "Free", "Cached prefix"} & {label for _, label in sizes}
+    tool = next(p for p in view["sources"] if p["label"] == "edit")
+    assert (tool["provided_by"], tool["source_kind"]) == ("qwen", "sdk_entry")
+    assert tool["source_detail"] == "Built-in tools · edit" and "4.3k tokens" in tool["text"]
+    assert view["estimated_tokens"] == 23_400
+    assert view["sources"][-1]["category"] == "unattributed" and view["sources"][-1]["tokens"] == 1_200
+
+
+def test_context_report_before_provider_usage_has_no_measured_total():
+    report = "\n".join([
+        "## Context Usage", "",
+        "*No provider usage yet. These are local estimates, including the conversation.*", "",
+        "**Estimated usage, including the conversation**",
+        "Model: qwen-model  Context window: 131.1k tokens", "",
+        "  System prompt                    1.5k tokens (1.1%)",
+        "  Built-in tools                    800 tokens (0.6%)",
+        "  Memory files                        0 tokens (0.0%)",
+        "  Skills                              0 tokens (0.0%)",
+        "  Messages                         2.0k tokens (1.5%)",
+    ])
+    view = qwen_inventory(report)
+    assert view["reported_tokens"] is None and view["context_window"] == 131_100
+    assert [(p["label"], p["tokens"]) for p in view["sources"]] == [
+        ("System prompt", 1_500), ("Built-in tools", 800), ("Messages", 2_000)]
+    with pytest.raises(ValueError):
+        qwen_inventory("Command executed successfully.")
+
+
+async def test_context_inspection_reopens_the_session_without_a_model_turn(fake, tmp_path, monkeypatch):
+    req = request(tmp_path, session_key="chat-1", mcp_servers={"local": {"command": "test"}},
+                  images=[{"path": "shot.png"}])
+    await run(req)
+    assert context_inspector("chat-1", "another-session") is None
+    inspector = context_inspector("chat-1", "qwen-session")
+    assert inspector.ready
+    fake.say(CONTEXT_FRAMES)
+    monkeypatch.setenv("QWEN_TEST_ACK", "/context detail")
+    assert await inspector.context_report() == CONTEXT_REPORT
+    turn, first, second = fake.records()
+    assert (first["stdin"], second["stdin"]) == ("/context detail", "/context -d")
+    for call in (first, second):
+        argv = call["argv"]
+        assert argv[argv.index("--resume") + 1] == "qwen-session"
+        assert argv[argv.index("--system-prompt") + 1] == "You are Dev."
+        assert argv[argv.index("--model") + 1] == "qwen-model"
+        assert call["mcp"] == turn["mcp"]
+    # A CLI that does not know the command would have run it as a prompt.
+    fake.say([*CONTEXT_FRAMES[:2], {**CONTEXT_FRAMES[2], "num_turns": 1}])
+    monkeypatch.delenv("QWEN_TEST_ACK")
+    with pytest.raises(RuntimeError, match="sent to the model"):
+        await inspector.context_report()
+    inspector.running = True
+    assert not inspector.ready
+    with pytest.raises(RuntimeError, match="turn to finish"):
+        await inspector.context_report()
+
+
+async def test_context_inspection_never_wraps_the_command_in_an_oversized_role(fake, tmp_path):
+    await run(request(tmp_path, session_key="chat-2", system_prompt="role" * 10000))
+    fake.say(CONTEXT_FRAMES)
+    await context_inspector("chat-2", "qwen-session").context_report()
+    call = fake.records()[-1]
+    assert call["stdin"] == "/context detail" and "--system-prompt" not in call["argv"]
+
+
+async def test_task_context_is_inspected_through_the_api_path(ctx, fake, wait_for):
+    async with ctx.db.session() as session:
+        dev = await session.get(TeamMember, DEV)
+        dev.agent_backend = "qwen"
+        dev.model = "qwen-model"
+        dev.isolate_worktree = False
+        session.add(dev)
+    task = await ctx.teams.create_task(team_id=TEAM, assignee_id=DEV, title="Context",
+                                       brief="Measure", auto_start=True)
+    await ctx.teams.update_task(task.id, {"status": TaskStatus.PENDING})
+    await wait_for(task.id, timeout=20)
+    assert inventory_response(task.id, [], STUDIO_VIEW, "qwen-session")["can_inspect"]
+    assert not inventory_response(task.id, [], STUDIO_VIEW, "stale-session")["can_inspect"]
+    fake.say(CONTEXT_FRAMES)
+    view = await inspect_session(task.id, "qwen-session")
+    assert view["origin"] == "qwen_runtime" and view["can_inspect"]
+    assert view["reported_tokens"] == 24_600
+    assert "--resume" in fake.records()[-1]["argv"]

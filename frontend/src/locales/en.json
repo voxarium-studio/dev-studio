@@ -1,6 +1,7 @@
 {
   "effortSolver": {
     "name": "Effort Solver",
+    "evaluating": "Effort Solver is scoring this subagent…",
     "weights": "Effort Solver weights",
     "weightsHint": "Higher weights give a criterion more influence. Higher complexity, creativity and depth increase effort; higher coverage reduces it. The result is normalized to 1–5.",
     "invalidWeights": "Use non-negative finite weights, with at least one greater than zero.",
@@ -1012,7 +1013,8 @@
       "model": "Model",
       "effort": "Effort",
       "sameAsMember": "Same as the member",
-      "sameAsMemberValue": "Same as the member ({value})"
+      "sameAsMemberValue": "Same as the member ({value})",
+      "effortSolverAtStart": "Same as the member (Auto): Effort Solver chooses the effort when the task starts"
     },
     "changes": {
       "touched": "Files touched",
@@ -1097,7 +1099,8 @@
       "contextHint": "Input tokens in the latest request, including cached input. The context window capacity is shown when reported by the runtime.",
       "tokensSpent": "Tokens spent: {tokens}",
       "tokensSpentHint": "Total tokens spent on this task across all runs: input, cached input and output. Updates as the runtime reports usage.",
-      "isolatedWorktree": "isolated worktree"
+      "isolatedWorktree": "isolated worktree",
+      "effortSolverAtStart": "Auto: Effort Solver chooses the effort when the task starts"
     },
     "runSettings": {
       "effort": "{effort} effort",
@@ -1162,6 +1165,7 @@
         "stopped": "stopped"
       },
       "calls": "{count} calls",
+      "effort": "Sub-agent effort",
       "tokens": "Tokens: {tokens}",
       "apiCost": "API Cost: {cost}",
       "usageUnavailable": "unavailable"
@@ -1214,6 +1218,7 @@
       "emptyTodo": "No messages yet. Release the task to Pending to hand it to the agent.",
       "emptyAgent": "No messages yet. Start the task to hand it to the agent.",
       "thinking": "Thinking",
+      "studioToolsUsed": "Studio tools used: {count}",
       "toolsUsed": "Tools used: {count}"
     },
     "verbosity": {
@@ -1453,8 +1458,8 @@
       "maxTurnsOverride": "Max turns Override",
       "inheritedRunSettings": "From Team Settings: {mode} · Max turns: {turns}",
       "effort": "Effort",
-      "effortDefault": "Leave it to the model",
-      "effortHint": "How hard the model works per turn. Higher costs more tokens and time; lower suits short, well-scoped tasks. Unset follows whatever the model does by default.",
+      "effortDefault": "Model default in chats; Effort Solver chooses for each task when it starts",
+      "effortHint": "How hard the model works per turn. Higher costs more tokens and time; lower suits short, well-scoped tasks. Unset follows the model default in chats; for a task, Effort Solver chooses the effort when the task starts.",
       "soloMode": "Solo Mode — one task at a time",
       "soloModeHint": "A released task waits in Pending while another of this member's tasks is in progress, and starts by itself when that one ends — lowest number first. Off, every released task runs at once.",
       "isolate": "Isolate in a separate checkout",
@@ -2668,10 +2673,6 @@
       }
     },
     "fragments": {
-      "system_prompt_base": {
-        "label": "System Prompt Base",
-        "hint": "Common text sent at the very beginning of every agent’s system prompt, before their Responsibility. Leave empty to send nothing."
-      },
       "identity": {
         "label": "Introduction",
         "hint": "The line that introduces every member: their name, role and team."
@@ -2719,6 +2720,10 @@
       "project_memory": {
         "label": "Project memory",
         "hint": "Sent to task runs and chats while project memory is on and the Studio’s tools reach the session, also when it is empty — it asks agents to record what they learn. {entries} is the index: one line per entry, its name and description, cut at the limit set on the Memory page."
+      },
+      "subagents": {
+        "label": "Subagents",
+        "hint": "Sent to task runs the Studio’s tools reach; chats have no task to split and do not get it. Requires splitting the task into parallel parts and delegating them through the Studio’s subagent tools, and no subagents when the task does not split."
       },
       "code_graph": {
         "label": "Code graph",
@@ -2879,7 +2884,8 @@
       "codex_journal": "Codex session journal",
       "claude_code_journal": "Claude Code session journal",
       "qwen_journal": "Qwen Code session journal",
-      "claude_code_runtime": "Claude Code /context"
+      "claude_code_runtime": "Claude Code /context",
+      "qwen_runtime": "Qwen Code /context detail"
     },
     "inspect": "Inspect live context",
     "showStudio": "Studio records",
@@ -2918,7 +2924,7 @@
       "message": "Message"
     },
     "inspecting": "Inspecting…",
-    "inspectHint": "Requests the active runtime’s breakdown. Claude may contact the provider to count tokens; this action is never run automatically.",
+    "inspectHint": "Requests the runtime’s own breakdown. Claude may contact the provider to count tokens. Qwen Code is started briefly on the saved session to run /context detail, without a model turn, and is available between turns. This action is never run automatically.",
     "tokenCount": "{tokens} tokens",
     "noText": "The runtime supplied counts or metadata without the source text.",
     "emptyText": "Empty source text.",

@@ -18,8 +18,10 @@ from sqlmodel import select
 
 from ..models.base import utcnow
 from ..models.subagents import SubagentMessage, TaskSubagent
-from ..models.teams import TaskStatus, TeamTask
+from ..models.teams import TaskStatus, TeamMember, TeamTask
 from .backends.base import AgentRunRequest, get_backend
+from .effort_solver import EFFORT_SOLVER_ID
+from .effort_solver_runner import EffortSolution, solve_effort
 from .tools import SERVER_NAME, build_toolset
 from .usage import RunUsage
 
@@ -87,9 +89,19 @@ class SubagentManager:
         if run.closing:
             raise ValueError("This task run is closing")
 
+    async def _solve_effort(self, run: ParentRun, description: str, prompt: str) -> EffortSolution:
+        """Score one assignment with the team's Effort Solver, read fresh each time (§10.11)."""
+        async with self.owner.db.session() as session:
+            solver = await session.get(TeamMember, f"{run.request.task.team_id}__{EFFORT_SOLVER_ID}")
+        if solver is None:
+            raise RuntimeError("The built-in Effort Solver is missing. Reload the team and retry.")
+        return await solve_effort(
+            solver, description, prompt, max_message_bytes=self.owner.config.teams.max_message_bytes,
+        )
+
     async def create(
         self, task_id: str, member_id: str, *, prompt: str, description: str,
-        backend: str | None = None, model: str | None = None, effort: str | None = None,
+        backend: str | None = None, model: str | None = None,
     ) -> dict:
         run = self._run(task_id, member_id)
         if not prompt.strip() or not description.strip():
@@ -103,24 +115,48 @@ class SubagentManager:
         available, reason = implementation.is_available()
         if not available:
             raise ValueError(reason or f"Backend {backend} is unavailable")
-        if effort is not None and effort not in {"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}:
-            raise ValueError("Unknown effort level")
+        # §10.3, §10.11: Effort Solver, not the parent, chooses a worker's effort from its
+        # description and prompt. A launch already known to be refused is not paid for, and
+        # the model call stays outside `run.lock`: a slow evaluation must not hold up
+        # stopping or closing the run. It is awaited inside the parent's own slot, like the
+        # Producer's — taking another would deadlock at capacity. Failure raises: no worker
+        # starts on a substituted effort.
+        await self._launch_allowed(task_id, run)
+        solution = await self._solve_effort(run, description.strip(), prompt)
+        spent = {key: int(solution.usage.get(key) or 0) for key in (
+            "total_tokens", "total_uncached_tokens", "total_cached_tokens",
+            "total_input_tokens", "total_output_tokens", "num_turns",
+        )}
+        cost = float(solution.usage.get("total_cost_usd") or 0)
         async with run.lock:
+            # Checked again: the run may have closed, or parallel spawns used up the limit.
             await self._launch_allowed(task_id, run)
             row = TaskSubagent(
                 task_id=task_id, member_id=member_id, description=description.strip(),
-                backend=backend, model=model or run.request.model,
-                effort=effort if effort is not None else (
-                    run.request.effort if backend == run.request.member.agent_backend else None
-                ),
+                backend=backend, model=model or run.request.model, effort=solution.effort_level,
             )
             # Track ownership before the first cancellable INSERT/publish. A parent
             # stopped during spawn must also close a row whose job never started.
             run.children.add(row.id)
             async with self.owner.db.session() as session:
                 session.add(row)
+                # The evaluation is the parent's spend, as a Producer's is its chat's: it
+                # joins the task totals with the worker it launched, and stays out of the
+                # worker's own counters (§10.4).
+                if cost or any(spent.values()):
+                    await session.exec(update(TeamTask).where(TeamTask.id == task_id).values(
+                        total_cost_usd=TeamTask.total_cost_usd + cost,
+                        **{key: getattr(TeamTask, key) + value for key, value in spent.items()},
+                    ))
             await self._start(run, row, prompt)
-        return row.model_dump(mode="json")
+        if cost or any(spent.values()):
+            await self.owner._publish_task_changed(task_id)
+        # §10.3: the four scores travel in this answer only — the transcript keeps the call's
+        # result, which is where the spawn row draws them; `TaskSubagent` stores the effort.
+        return {**row.model_dump(mode="json"), "effort_solver": {
+            "scores": solution.scores.model_dump(), "effort": solution.effort,
+            "effort_level": solution.effort_level,
+        }}
 
     async def _start(self, run: ParentRun, row: TaskSubagent, prompt: str) -> None:
         # Persist/publish before submitting, so an immediate stop still has a start row.
@@ -235,7 +271,8 @@ class SubagentManager:
             row.task_id, row.member_id, role="system", kind="system", text=subtype,
             data={
                 "task_id": row.id, "task_type": "studio_agent", "description": row.description,
-                "backend": row.backend, "model": row.model, "status": row.status,
+                "backend": row.backend, "model": row.model, "effort": row.effort,
+                "status": row.status,
                 "summary": row.summary, "last_tool_name": last_tool,
                 "usage": {"total_tokens": row.total_tokens, "total_cost_usd": row.total_cost_usd,
                           "total_uncached_tokens": row.total_uncached_tokens,

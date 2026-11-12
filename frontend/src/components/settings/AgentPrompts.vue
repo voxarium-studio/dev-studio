@@ -53,7 +53,6 @@ const GROUPS: { title: MessageKey; note: MessageKey; keys: string[] }[] = [
     title: 'agentPrompts.groups.identity.title',
     note: 'agentPrompts.groups.identity.note',
     keys: [
-      'system_prompt_base',
       'identity',
       'identity_responsibility',
       'identity_manager',
@@ -72,6 +71,7 @@ const GROUPS: { title: MessageKey; note: MessageKey; keys: string[] }[] = [
       'member_skills',
       'docs_location',
       'project_memory',
+      'subagents',
       'code_graph',
       'isolated_checkout',
       'outside_project',

@@ -164,7 +164,7 @@ export interface ToolEntry<M extends TranscriptMessage = TranscriptMessage> {
 export type TranscriptBlock<M extends TranscriptMessage = TranscriptMessage> =
   | { type: 'message'; key: string; message: M }
   | { type: 'thinking'; key: string; message: M }
-  | { type: 'tools'; key: string; entries: ToolEntry<M>[]; calls: number }
+  | { type: 'tools'; key: string; entries: ToolEntry<M>[]; calls: number; studio: boolean }
 
 /**
  * The last line of the transcript: what was logged most recently, and what the run has
@@ -209,6 +209,35 @@ export function isMcpCall(message: TranscriptMessage): boolean {
   if (message.kind !== 'tool_use') return false
   const raw = typeof message.data?.name === 'string' ? message.data.name : message.text
   return typeof raw === 'string' && raw.startsWith('mcp__')
+}
+
+/** How every runtime names a Studio tool — mirrors `studio_tool_prefix` in `api/teams.py`. */
+export const STUDIO_TOOL_PREFIX = 'mcp__voxarium_studio__'
+
+/** Whether this call went to the Studio's own MCP server — the board, documents, subagents (§10.4). */
+export function isStudioCall(message: TranscriptMessage): boolean {
+  if (message.kind !== 'tool_use') return false
+  const raw = typeof message.data?.name === 'string' ? message.data.name : message.text
+  return typeof raw === 'string' && raw.startsWith(STUDIO_TOOL_PREFIX)
+}
+
+/** Whether this call started a Studio-managed subagent (§10.3). */
+export function isSubagentSpawn(message: TranscriptMessage): boolean {
+  return isStudioCall(message) && bareToolName(message) === 'spawn_subagent'
+}
+
+/**
+ * Every call's results by the call's id, from the whole feed rather than the level's rows —
+ * a call row may need what its result said (a spawn's Effort Solver scores) at Default too,
+ * where the results themselves are not drawn.
+ */
+export function resultsByCall<M extends TranscriptMessage>(messages: M[]): Map<string, M> {
+  const results = new Map<string, M>()
+  for (const message of messages) {
+    const id = message.kind === 'tool_result' ? message.data?.tool_use_id : undefined
+    if (typeof id === 'string' && id) results.set(id, message)
+  }
+  return results
 }
 
 /**
@@ -335,6 +364,9 @@ export function transcriptRows<M extends TranscriptMessage>(
  * A thinking message becomes a thinking block. Consecutive tool calls become one tools
  * block, whatever the tools were — `Bash`, `Grep`, an MCP call, a skill being loaded — so
  * a run that read twelve files between two sentences is one folded line rather than twelve.
+ * The one split is the Studio's own tools (`studio`): a run of them is a block of its own,
+ * drawn violet, because a call to the board, the documents or a subagent acts on the team
+ * rather than on the files (2026-11-12, at the user's request).
  * At Verbose each call keeps its results under it, matched on the call's id; a result whose
  * call is not in sight, a delegated agent's work, and a system frame arriving between two
  * calls stay inside the block too, so the noise of a busy run does not split it into a
@@ -372,8 +404,17 @@ export function transcriptBlocks<M extends TranscriptMessage>(
         continue
       }
     }
+    // A call of the other family starts a block of its own; results, frames and delegated
+    // work carry on in whichever block is open. A block holding no call yet takes the
+    // family of the first one rather than leaving an empty block behind.
+    const own = message.kind === 'tool_use' && !isDelegatedWork(message)
+    const studio = own && isStudioCall(message)
+    if (group !== null && own && group.studio !== studio) {
+      if (group.calls) group = null
+      else group.studio = studio
+    }
     if (group === null) {
-      group = { type: 'tools', key, entries: [], calls: 0 }
+      group = { type: 'tools', key, entries: [], calls: 0, studio }
       blocks.push(group)
     }
     const entry: ToolEntry<M> = { key, message, results: [] }

@@ -67,10 +67,13 @@ async def test_spawn_binds_task_member_and_run_not_model_supplied_authority(boun
     assert not result.get("is_error")
     assert json.loads(body(result))["id"] == "child_1"
     manager.require_run.assert_called_once_with("task_owner", "member_owner", "run_current")
+    # §10.11: Effort Solver chooses the effort, so one sent anyway — by a caller that
+    # remembers the earlier schema — is not passed on, and the schema no longer offers it.
     manager.create.assert_awaited_once_with(
         "task_owner", "member_owner", description="Review parser",
-        prompt="Read the parser and report bugs.", backend="codex", model="chosen-model", effort="high",
+        prompt="Read the parser and report bugs.", backend="codex", model="chosen-model",
     )
+    assert "effort" not in definitions(build())["spawn_subagent"].input_schema["properties"]
 
 
 async def test_current_task_controls_return_results_and_usage(bound_tools):

@@ -36,8 +36,11 @@ def solver_member(client):
 
 
 def test_calculation_matches_requested_example_and_extremes():
-    assert calculate_effort(SCORES) == 4
-    assert EFFORT_LEVELS[calculate_effort(SCORES) - 1] == "xhigh"
+    assert calculate_effort(SCORES) == 3
+    assert EFFORT_LEVELS[calculate_effort(SCORES) - 1] == "high"
+    # The defaults are 1.5, 1.5, 3, 2.5; the earlier 2, 1.5, 3, 2 scored this example 4.
+    assert EffortWeights().model_dump() == dict(complexity=1.5, creativity=1.5, depth=3, coverage=2.5)
+    assert calculate_effort(SCORES, dict(complexity=2, creativity=1.5, depth=3, coverage=2)) == 4
     assert calculate_effort(dict(complexity=1, creativity=1, depth=1, coverage=10)) == 1
     assert calculate_effort(dict(complexity=10, creativity=10, depth=10, coverage=1)) == 5
 
@@ -58,7 +61,7 @@ def test_scores_require_integers_in_range(value):
 
 def test_json_and_fenced_json_are_accepted_but_missing_or_extra_scores_fail():
     assert parse_scores(json.dumps(SCORES)).model_dump() == SCORES
-    assert calculate_effort(f"```json\n{json.dumps(SCORES)}\n```") == 4
+    assert calculate_effort(f"```json\n{json.dumps(SCORES)}\n```") == 3
     with pytest.raises(ValidationError):
         parse_scores({"complexity": 5})
     with pytest.raises(ValidationError):
@@ -81,7 +84,7 @@ def test_cli_reads_stdin_and_prints_numeric_effort(monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["effort_solver"])
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(SCORES)))
     main()
-    assert capsys.readouterr().out == "4\n"
+    assert capsys.readouterr().out == "3\n"
 
 
 def test_package_cli_accepts_stdin_without_runtime_warnings():
@@ -90,7 +93,7 @@ def test_package_cli_accepts_stdin_without_runtime_warnings():
         input=json.dumps(SCORES), text=True, capture_output=True, timeout=30,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout == "4\n"
+    assert result.stdout == "3\n"
     assert result.stderr == ""
 
 
@@ -116,7 +119,7 @@ def test_weights_are_solver_only_validated_atomically_and_resettable(client, pro
     assert solver_member(client) == before
     custom = client.patch(MEMBER_URL, json={"effort_solver_weights": {"depth": 5}})
     assert custom.status_code == 200
-    assert custom.json()["effort_solver_weights"] == dict(complexity=2, creativity=1.5, depth=5, coverage=2)
+    assert custom.json()["effort_solver_weights"] == dict(complexity=1.5, creativity=1.5, depth=5, coverage=2.5)
     cleared = client.patch(MEMBER_URL, json={"effort_solver_weights": None})
     assert cleared.status_code == 200
     assert cleared.json()["effort_solver_weights"] is None

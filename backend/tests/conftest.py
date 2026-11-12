@@ -167,6 +167,30 @@ def no_commit_model(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def canned_effort_solver(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Answer every Effort Solver evaluation with fixed scores by default (§10.11).
+
+    A task whose effort is unset ("Auto") is scored when its run starts, and in the suite
+    the Solver member sits on the same stub backend as everyone else, which answers in
+    prose. Patching the runner's backend lookup keeps those stub runs starting; a test that
+    inspects or fails the evaluation patches ``effort_solver_runner.get_backend`` itself,
+    which overrides this.
+    """
+    from voxarium_studio.teams import effort_solver_runner
+    from voxarium_studio.teams.backends.base import AgentEvent
+
+    class Canned:
+        def is_available(self) -> tuple[bool, str]:
+            return True, "canned"
+
+        async def run(self, request):
+            answer = '{"complexity": 3, "creativity": 2, "depth": 3, "coverage": 9}'
+            yield AgentEvent(kind="result", text=answer, data={}, is_final=True)
+
+    monkeypatch.setattr(effort_solver_runner, "get_backend", lambda _name: Canned())
+
+
+@pytest.fixture(autouse=True)
 def no_result_follow_up(monkeypatch: pytest.MonkeyPatch) -> None:
     """Never resume a stub session for its result type by default (§10.4).
 

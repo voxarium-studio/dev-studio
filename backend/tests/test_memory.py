@@ -199,7 +199,10 @@ def _system_prompt(memory: str | None, prompts: AgentPromptsConfig | None = None
 
 def test_the_system_prompt_carries_the_index_after_the_documents() -> None:
     prompt = _system_prompt("- fact — A fact")
-    assert "Project memory holds lasting facts" in prompt
+    assert "Project memory holds the team's lasting facts" in prompt
+    # The prompt sends the agent to the Studio's tools by name, and away from its own.
+    assert "only through the Studio's tools, never your own memory" in prompt
+    assert all(tool in prompt for tool in ("recall", "remember", "forget"))
     assert prompt.index("shared documents live") < prompt.index("Project memory") < prompt.index(
         "- fact — A fact"
     )

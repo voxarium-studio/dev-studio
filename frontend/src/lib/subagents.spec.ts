@@ -82,6 +82,20 @@ describe('durable Studio-managed work (§10.3)', () => {
     expect(subagents([progress], [row])[0]).toMatchObject({ inputTokens: null, outputTokens: null, cacheReadTokens: 800 })
   })
 
+  it('carries the effort Effort Solver chose, from the saved row and from live frames', () => {
+    // §10.11: the durable row keeps it after the transcript is cleaned up …
+    expect(subagents([], [saved({ effort: 'xhigh' })])[0]?.effort).toBe('xhigh')
+    // … a worker spawned while the dialog is open has only its start frame …
+    const live = started('studio_2', { task_type: 'studio_agent', backend: 'codex', effort: 'low' })
+    expect(subagents([live])[0]?.effort).toBe('low')
+    // … and a follow-up's restart frame recorded without one does not blank the row's.
+    const restarted = { ...started('studio_1', { task_type: 'studio_agent' }), created_at: '2026-09-04T10:02:00Z' }
+    expect(subagents([restarted], [saved({ effort: 'xhigh' })])[0]).toMatchObject({ status: 'running', effort: 'xhigh' })
+    // A runtime's own sub-agent reports no effort: unknown, so nothing is drawn for it.
+    expect(subagents([started('native_1')])[0]?.effort).toBe('')
+    expect(subagents([], [saved()])[0]?.effort).toBe('')
+  })
+
   it('retains archived or compressed workers when lifecycle messages are gone', () => {
     for (const messages of [[], [message({ kind: 'compressed summary', text: 'Task summary' })]]) {
       const list = subagents(messages, [saved()])

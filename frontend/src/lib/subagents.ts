@@ -48,6 +48,11 @@ export interface Subagent extends TokenDirections {
   /** Studio-managed agents identify the selected runtime and model (§10.3). */
   backend: string
   model: string
+  /**
+   * The effort Effort Solver chose for a Studio-managed agent (§10.3, §10.11). Empty for a
+   * runtime's own delegation, which does not report one — unknown, not "default".
+   */
+  effort: string
   status: SubagentStatus
   /** Whether the member's run is held open until this one finishes. */
   holdsRun: boolean
@@ -184,7 +189,7 @@ function frame(
  * running at that point was **stopped**, not left going. Without this a task resumed after
  * a cut-off run would show the old run's sub-agents as live forever.
  */
-export function subagents(messages: AgentMessage[], persisted: TaskSubagent[] = []): Subagent[] {
+export function subagents(messages: (LifecycleMessage & Pick<AgentMessage, 'created_at'>)[], persisted: TaskSubagent[] = []): Subagent[] {
   const byId = new Map<string, Subagent>()
   const updatedAt = new Map<string, number>()
   // §10.3: durable rows keep the panel and its counters after transcript cleanup. Their
@@ -193,6 +198,7 @@ export function subagents(messages: AgentMessage[], persisted: TaskSubagent[] = 
     byId.set(row.id, {
       id: row.id, description: row.description, type: 'studio_agent',
       typeLabel: typeLabel('studio_agent'), backend: row.backend, model: row.model,
+      effort: row.effort ?? '',
       status: row.status === 'queued' || row.status === 'running' ? 'running' : asStatus(row.status),
       holdsRun: true, startedAt: row.created_at, endedAt: row.finished_at,
       ...tokenBreakdown({ total_tokens: row.total_tokens, total_uncached_tokens: row.total_uncached_tokens,
@@ -251,6 +257,9 @@ export function subagents(messages: AgentMessage[], persisted: TaskSubagent[] = 
         typeLabel: typeLabel(type),
         backend: text(data.backend),
         model: text(data.model),
+        // A follow-up turn restarts the same worker; a frame recorded before effort was
+        // reported must not blank what the durable row already says.
+        effort: text(data.effort) || previous?.effort || '',
         status: 'running',
         holdsRun: HOLDING_TASK_TYPES.has(type),
         startedAt: message.created_at,

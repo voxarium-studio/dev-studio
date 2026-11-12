@@ -17,6 +17,7 @@ from voxarium_studio.core.paths import ProjectPaths
 from voxarium_studio.core.prompts import SPECS, AgentPromptsConfig, fill
 from voxarium_studio.models.teams import TeamMember
 from voxarium_studio.teams.agents import identity_lines
+from voxarium_studio.teams.orchestrator import _build_system_prompt
 
 # ------------------------------------------------------------------ resolution
 
@@ -45,24 +46,61 @@ def test_blanking_an_optional_fragment_removes_it() -> None:
     assert prompts.text("docs_location", docs_dir="somewhere") == ""
 
 
-def test_the_base_leads_the_identity_block_and_responsibility_follows() -> None:
-    """The System Prompt Base is the shared opening of every member's identity block,
-    and the member's Responsibility is appended right after it (§10.3)."""
+def test_responsibility_leads_the_identity_block() -> None:
+    """The member's Responsibility opens the identity block and the introduction follows
+    it (§10.3). Nothing shared sits above it: the System Prompt Base that did was retired
+    on 2026-11-12."""
     member = TeamMember(team_id="team", name="Marina", role_title="Game Designer",
                         responsibility="Levels and narrative.")
 
-    def lines(prompts: AgentPromptsConfig) -> list[str]:
-        return identity_lines(member=member, team=None, manager=None, reports=[],
-                              peers=[], prompts=prompts)
+    built = identity_lines(member=member, team=None, manager=None, reports=[], peers=[],
+                           prompts=AgentPromptsConfig())
+    assert built[0] == "Levels and narrative."
+    assert built[1].startswith("You are Marina")
+    assert "system_prompt_base" not in SPECS
 
-    built = lines(AgentPromptsConfig(system_prompt_base="Common rules for everyone."))
-    assert built[0] == "Common rules for everyone."
-    assert built[1] == "Levels and narrative."
-    assert built[2].startswith("You are Marina")
 
-    untouched = lines(AgentPromptsConfig())
-    assert untouched[0] == "Levels and narrative.", "an unwritten base sends nothing"
-    assert "Common rules" not in "\n".join(untouched)
+def test_a_config_still_carrying_the_retired_base_loads_and_loses_it(project: Path) -> None:
+    """A project that wrote a System Prompt Base keeps the key in ``config.yaml`` until its
+    next save; it has to load rather than fail the Studio's start, and the text is no
+    longer sent."""
+    paths = ProjectPaths.for_project(project)
+    paths.config_file.write_text(
+        "teams:\n"
+        "  prompts:\n"
+        "    finish: Wrap up.\n"
+        "    system_prompt_base: Common rules for everyone.\n",
+        encoding="utf-8",
+    )
+    config = load_config(paths)
+    assert config.teams.prompts.finish == "Wrap up."
+    assert not hasattr(config.teams.prompts, "system_prompt_base")
+
+    save_config(paths, config)
+    assert "system_prompt_base" not in paths.config_file.read_text(encoding="utf-8")
+
+
+def test_a_task_with_studio_tools_is_told_to_delegate_through_them() -> None:
+    """§10.3: the ``subagents`` fragment names the Studio's tools and rules out the
+    runtime's own. It goes only where those tools work — a task run they reach; a chat
+    has no task to split, and a run without them has nothing to spawn with."""
+    member = TeamMember(id="m", team_id="t", name="Ada", role_title="Developer")
+
+    def prompt(prompts: AgentPromptsConfig | None = None, **overrides: bool) -> str:
+        return _build_system_prompt(
+            member=member, team=None, manager=None, reports=[], peers=[], task_id="VS-1",
+            project_root=Path("/p"), workdir=Path("/p"), isolated=False,
+            docs_dir=Path("/p/docs"), prompts=prompts or AgentPromptsConfig(),
+            **{"has_studio_tools": True, **overrides},
+        )
+
+    task = prompt()
+    assert all(tool in task for tool in ("spawn_subagent", "wait_subagents", "get_subagent"))
+    assert "Never use your own agent or task tools." in task
+    assert "do not create subagents" in task
+    assert "spawn_subagent" not in prompt(chat=True)
+    assert "spawn_subagent" not in prompt(has_studio_tools=False)
+    assert "spawn_subagent" not in prompt(AgentPromptsConfig(subagents=""))
 
 
 def test_blanking_a_required_message_falls_back_to_the_default() -> None:

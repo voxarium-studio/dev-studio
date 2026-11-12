@@ -8,6 +8,11 @@ const stamp = fs.existsSync(stampFile) ? JSON.parse(fs.readFileSync(stampFile, '
 const release = releaseInfo(stamp, metadata.version);
 require('./scripts/installer-messages.cjs').writeInstallerMessages(release.display);
 const feed = updateFeedOptions(process.env);
+// `compression: normal` means Deflate level 7 for the ZIP payload, and 7za spends 130 s of one
+// thread on it, most of that on the two 300 MB executables. Level 5 packs the same payload in
+// 50 s for 3 MB more (level 1: 14 s, 22 MB more). The level has no config key, only this
+// variable, so a build can still choose its own.
+process.env.ELECTRON_BUILDER_COMPRESSION_LEVEL ??= '5';
 module.exports = {
   ...metadata.build,
   publish: feed ? [feed] : null,

@@ -129,10 +129,21 @@ The old application's working copy is not deleted.
 
 ## Build and startup performance
 
-Frontend dependencies are installed only when package-lock.json changes. The frontend
+Desktop and frontend dependencies are installed only when their package-lock.json changes
+(`build-installer.bat` and `prepare-runtime.ps1` keep a stamp in each `node_modules`;
+delete `node_modules` to force a clean install). The frontend
 build is cached by source-content hashes. Python's downloaded runtime is retained,
 Python dependencies follow backend/uv.lock, and bytecode is precompiled for startup.
 The installer uses a ZIP payload with normal compression for faster extraction; this trades a larger download for less decompression work during installation. Differential update packages are disabled for this payload. Only English and Russian Electron locale packs are shipped (§6.4).
+Packing that payload is the longest build step, and 7za spends it in one thread, mostly
+on the two 300 MB executables. `electron-builder.cjs` therefore lowers Deflate from level 7
+to 5: 7za alone needs 50 s instead of 130 s, for 3 MB more. Set
+`ELECTRON_BUILDER_COMPRESSION_LEVEL` to choose another level — `1` packs in 14 s for
+22 MB more, `7` restores the previous size.
+Inside a real build the step takes about 100 s rather than 50: Microsoft Defender scans
+the freshly written `dist/win-unpacked` while 7za reads it, and 7za waits for it. Only a
+Defender exclusion for `desktop/dist` removes that wait, which is the build machine
+owner's decision; without one, levels below 5 gain little.
 Most of the payload is the Electron/Chromium runtime, the Claude Code executable
 bundled by the agent SDK, and the standalone Python and Node runtimes. The Claude
 executable is required for Teams; uv provisions plugin environments, and Node/npm

@@ -11,9 +11,12 @@ import type { AgentMessage } from '@/api/types'
 import {
   editStat,
   isFileEdit,
+  isStudioCall,
+  isSubagentSpawn,
   isVerbosity,
   liveLine,
   readVerbosity,
+  resultsByCall,
   transcriptBlocks,
   transcriptRows,
   upsertTranscript,
@@ -193,12 +196,14 @@ describe('what a level shows', () => {
 describe('blocks', () => {
   const blockTypes = (blocks: ReturnType<typeof transcriptBlocks>) => blocks.map((block) => block.type)
 
+  type Tools = Extract<ReturnType<typeof transcriptBlocks>[number], { type: 'tools' }>
+
   it('folds consecutive tool calls into one block, whatever the tools, and counts the calls', () => {
     const feed = [
       message({ kind: 'text', text: 'Looking.' }),
       call('Read', { file_path: 'a.ts' }),
       call('Grep', { pattern: 'dash' }),
-      call('mcp__voxarium_studio__list_tasks'),
+      call('mcp__other__lookup'),
       call('Skill', { skill: 'voxarium_studio:studio' }),
       message({ kind: 'text', text: 'Found it.' }),
       call('Bash', { command: 'npm test' }),
@@ -206,9 +211,39 @@ describe('blocks', () => {
     const blocks = transcriptBlocks(feed, 'default')
 
     expect(blockTypes(blocks)).toEqual(['message', 'tools', 'message', 'tools'])
-    const first = blocks[1] as Extract<(typeof blocks)[number], { type: 'tools' }>
+    const first = blocks[1] as Tools
     expect(first.calls).toBe(4)
     expect(first.key).toBe(feed[1]!.id)
+    expect(first.studio).toBe(false)
+  })
+
+  it('gives a run of Studio tools a block of its own, results and all', () => {
+    const feed = [
+      call('Read', { file_path: 'a.ts' }, { id: 'toolu_1' }),
+      call('mcp__voxarium_studio__get_task', {}, { id: 'toolu_2' }),
+      message({ role: 'system', kind: 'tool_result', text: 'DS-05', data: { tool_use_id: 'toolu_2' } }),
+      call('mcp__voxarium_studio__spawn_subagent', {}, { id: 'toolu_3' }),
+      call('Bash', { command: 'npm test' }),
+    ]
+    for (const level of ['default', 'verbose'] as const) {
+      const blocks = transcriptBlocks(feed, level) as Tools[]
+      expect(blocks.map((block) => [block.studio, block.calls])).toEqual([[false, 1], [true, 2], [false, 1]])
+    }
+    const studio = transcriptBlocks(feed, 'verbose')[1] as Tools
+    expect(studio.entries[0]!.results.map((result) => result.text)).toEqual(['DS-05'])
+  })
+
+  it('keeps a frame before the first call in the block the call opens, whichever family', () => {
+    const feed = [
+      call('Read', { file_path: 'a.ts' }),
+      message({ kind: 'text', text: 'Checking the board.' }),
+      message({ role: 'system', kind: 'tool_result', text: 'orphan' }),
+      call('mcp__voxarium_studio__list_tasks'),
+    ]
+    const blocks = transcriptBlocks(feed, 'verbose')
+    expect(blockTypes(blocks)).toEqual(['tools', 'message', 'tools'])
+    expect((blocks[2] as Tools).studio).toBe(true)
+    expect((blocks[2] as Tools).entries).toHaveLength(2)
   })
 
   it('draws thinking as a block of its own, and drops the empty blocks a runtime redacts', () => {
@@ -262,6 +297,26 @@ describe('blocks', () => {
     const tools = blocks[0] as Extract<(typeof blocks)[number], { type: 'tools' }>
     expect(tools.calls).toBe(2)
     expect(tools.entries).toHaveLength(3)
+  })
+})
+
+describe('Studio calls (§10.3, §10.4)', () => {
+  it('recognises the Studio server by its prefix, and a spawn by its bare name', () => {
+    const spawn = call('mcp__voxarium_studio__spawn_subagent', { description: 'Review' })
+    expect(isStudioCall(spawn)).toBe(true)
+    expect(isSubagentSpawn(spawn)).toBe(true)
+    expect(isStudioCall(call('mcp__voxarium_studio__list_tasks'))).toBe(true)
+    expect(isSubagentSpawn(call('mcp__voxarium_studio__list_tasks'))).toBe(false)
+    expect(isStudioCall(call('mcp__other__spawn_subagent'))).toBe(false)
+    expect(isSubagentSpawn(call('spawn_subagent'))).toBe(false)
+    expect(isStudioCall(call('Agent'))).toBe(false)
+  })
+
+  it('finds every call’s result whatever the level draws', () => {
+    const result = message({ role: 'system', kind: 'tool_result', text: '{}', data: { tool_use_id: 'toolu_7' } })
+    const map = resultsByCall([call('Read', {}, { id: 'toolu_7' }), result, message({ kind: 'text' })])
+    expect([...map.keys()]).toEqual(['toolu_7'])
+    expect(map.get('toolu_7')).toBe(result)
   })
 })
 

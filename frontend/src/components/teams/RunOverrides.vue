@@ -38,7 +38,7 @@ function change(backend: string | null, model: string | null): void {
       <span class="mb-1 block text-small text-faint">{{ t('tasks.overrides.effort') }}</span>
       <ModelEffortSlider :model-value="effort" :levels="teams.options?.effort_levels"
         :label="t('tasks.overrides.effort')" :default-label="t('modelEffort.inherit')"
-        :default-title="t('tasks.overrides.sameAsMemberValue', { value: member?.effort || t('modelEffort.default') })"
+        :default-title="member?.effort ? t('tasks.overrides.sameAsMemberValue', { value: member.effort }) : t('tasks.overrides.effortSolverAtStart')"
         @update:model-value="emit('update:effort', $event)" />
     </label>
   </div>

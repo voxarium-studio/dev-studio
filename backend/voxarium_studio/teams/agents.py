@@ -78,15 +78,13 @@ def identity_lines(
     directory or a checkout that only existed for one run.
 
     The sentences are the ``identity_*`` templates from ``teams.prompts`` (§10.3); only
-    the data between them is the roster's. The shared ``system_prompt_base`` leads the
-    block for every member and the member's Responsibility follows it; a line whose data
-    is absent — no manager, no reports — is skipped, and so is one the user blanked in
-    Settings. The built-in Producer's responsibility mirrors its System Prompt (§10.11),
-    which belongs only to an active Producer chat and is resolved there with the chat's
-    language.
+    the data between them is the roster's. The member's Responsibility leads the block; a
+    line whose data is absent — no manager, no reports — is skipped, and so is one the
+    user blanked in Settings. The built-in Producer's responsibility mirrors its System
+    Prompt (§10.11), which belongs only to an active Producer chat and is resolved there
+    with the chat's language.
     """
     candidates = [
-        prompts.text("system_prompt_base"),
         prompts.text("identity_responsibility", responsibility=member.responsibility)
         if member.responsibility and not is_producer(member)
         else "",

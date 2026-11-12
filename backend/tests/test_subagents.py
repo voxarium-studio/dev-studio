@@ -3,18 +3,51 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 from sqlmodel import select
 
 from voxarium_studio.models.subagents import SubagentMessage, TaskSubagent
 from voxarium_studio.models.teams import AgentMessage, TeamMember, TeamTask, TaskStatus
+from voxarium_studio.teams import effort_solver_runner, subagents as subagents_module
 from voxarium_studio.teams.backends import base
 from voxarium_studio.teams.backends.base import AgentEvent
 
 
 TEAM = "team_default"
 MEMBER = f"{TEAM}__dev"
+SOLVER = f"{TEAM}__studio-effort-solver"
+# 1 + (1.5*1 + 1.5*1 + 3*2 + 2.5*7) / 19.125 rounds to 2: "medium", which is neither the
+# parent's "high" nor a model default, so an inherited effort cannot pass for a computed one.
+SCORES = {"complexity": 2, "creativity": 2, "depth": 3, "coverage": 3}
+
+
+class SolverBackend:
+    """Effort Solver's model call (§10.11), answered without billing anything."""
+
+    def __init__(self):
+        self.requests = []
+        self.answer = json.dumps(SCORES)
+        self.error = None
+        self.result_data = {}
+
+    def is_available(self):
+        return True, "test backend"
+
+    async def run(self, request):
+        self.requests.append(request)
+        if self.error:
+            yield AgentEvent(kind="error", text=self.error)
+            return
+        yield AgentEvent(kind="result", text=self.answer, data=self.result_data, is_final=True)
+
+
+@pytest.fixture
+def solver(monkeypatch):
+    backend = SolverBackend()
+    monkeypatch.setattr(effort_solver_runner, "get_backend", lambda _name: backend)
+    return backend
 
 
 def result(text="Done", *, tokens=0, cost=0.0, session="parent-session", **data):
@@ -41,7 +74,7 @@ async def messages(ctx, task_id):
 
 
 @pytest.fixture
-async def runner(ctx, monkeypatch):
+async def runner(ctx, monkeypatch, solver):
     ctx.config.teams.context_compression_tokens = 0
     ctx.config.teams.result_follow_up = False
 
@@ -141,6 +174,8 @@ async def test_any_backend_autojoins_with_own_session_context_and_aggregate_usag
     assert not worker.proactive_subagents
     assert worker.session_key == rows[0].id and worker.session_key != task.id
     assert worker.model == "child-model" and worker.member.agent_backend == "test_other_backend"
+    # §10.11: another backend's worker gets the solver's effort too, not a model default.
+    assert worker.effort == worker.member.effort == rows[0].effort == "medium"
     assert worker.member.permission_mode == parent_request.member.permission_mode
     assert worker.permission_mode == parent_request.permission_mode == "acceptEdits"
     assert worker.max_turns == parent_request.max_turns == 67
@@ -169,6 +204,143 @@ async def test_any_backend_autojoins_with_own_session_context_and_aggregate_usag
     assert child_progress.data["usage"]["total_input_tokens"] == 12
     assert child_progress.data["usage"]["total_output_tokens"] == 8
     assert not ctx.teams.subagents.runs and not ctx.jobs.is_running(rows[0].id)
+
+
+async def test_spawn_runs_the_worker_on_the_effort_solvers_choice(runner, solver):
+    ctx, _, start = runner
+    usage = {"input_tokens": 10, "cache_creation_input_tokens": 5,
+             "cache_read_input_tokens": 7, "output_tokens": 3}
+    solver.result_data = {"usage": usage, "total_tokens": 25, "total_cost_usd": 0.0123, "num_turns": 1}
+    child_requests, spawned, listed = [], [], []
+
+    async def backend(request):
+        if request.session_key != request.task.id:
+            child_requests.append(request)
+            yield result("Reviewed", tokens=100, cost=0.05, session="worker-session")
+            return
+        # The caller has no effort to pass, and the parent's own ("high") is not inherited.
+        child = await ctx.teams.subagents.create(
+            request.task.id, MEMBER, description="Review parser", prompt="Read parser.py and report bugs.",
+        )
+        spawned.append(child)
+        listed.extend(await ctx.teams.subagents.list(request.task.id, MEMBER))
+        await ctx.teams.subagents.wait(request.task.id, MEMBER, child["id"], timeout=3)
+        await ctx.teams.subagents.send(request.task.id, MEMBER, child["id"], "Check one more case")
+        await ctx.teams.subagents.wait(request.task.id, MEMBER, timeout=3)
+        yield result("Integrated", tokens=10, cost=0.01)
+
+    task, job = await start(backend)
+    await asyncio.wait_for(job, 8)
+    saved = await load(ctx, task.id)
+    assert saved.status == TaskStatus.NEEDS_REVIEW
+    assert spawned[0]["effort"] == "medium"
+    # The spawn's answer carries the evaluation the transcript draws in the call row.
+    assert spawned[0]["effort_solver"] == {"scores": SCORES, "effort": 2, "effort_level": "medium"}
+    assert [row["effort"] for row in listed] == ["medium"]
+    assert "effort_solver" not in listed[0]
+    assert [request.effort for request in child_requests] == ["medium", "medium"]
+    assert all(request.member.effort == "medium" for request in child_requests)
+    # One evaluation per spawn, over the label and the assignment alone; a follow-up
+    # turn keeps the effort its worker was started with.
+    assert len(solver.requests) == 1
+    assert solver.requests[0].member.id == SOLVER
+    assert json.loads(solver.requests[0].prompt) == {
+        "title": "Review parser", "description": "Read parser.py and report bugs.",
+    }
+    row = (await children(ctx, task.id))[0]
+    assert row.effort == "medium"
+    frames = [message for message in await messages(ctx, task.id)
+              if message.kind == "system" and message.data.get("task_id") == row.id]
+    assert {"task_started", "task_notification"} <= {frame.text for frame in frames}
+    assert all(frame.data["effort"] == "medium" for frame in frames)
+    # The evaluation is the parent task's spend and stays out of the worker's counters.
+    assert row.total_tokens == 200 and row.total_cost_usd == pytest.approx(0.10)
+    assert saved.total_tokens == 200 + 10 + 25
+    assert saved.total_cost_usd == pytest.approx(0.10 + 0.01 + 0.0123)
+    assert (saved.total_uncached_tokens, saved.total_cached_tokens) == (18, 7)
+    assert (saved.total_input_tokens, saved.total_output_tokens) == (15, 3)
+    assert saved.num_turns == 4
+
+
+@pytest.mark.parametrize("failure", ["invalid_json", "out_of_range", "backend_error"])
+async def test_solver_failure_starts_no_worker_and_substitutes_no_effort(runner, solver, failure):
+    ctx, _, start = runner
+    if failure == "invalid_json":
+        solver.answer = "This looks like a simple task."
+    elif failure == "out_of_range":
+        solver.answer = json.dumps({**SCORES, "depth": 11})
+    else:
+        solver.error = "Solver unavailable"
+    child_started = False
+    errors = []
+
+    async def backend(request):
+        nonlocal child_started
+        if request.session_key != request.task.id:
+            child_started = True
+            yield result("Should not run", tokens=99)
+            return
+        try:
+            await ctx.teams.subagents.create(request.task.id, MEMBER, description="Review", prompt="Read")
+        except (ValueError, RuntimeError) as exc:
+            errors.append(exc)
+        yield result("Did the work without a worker", tokens=5)
+
+    task, job = await start(backend)
+    await asyncio.wait_for(job, 8)
+    assert len(errors) == 1 and len(solver.requests) == 1
+    assert not child_started and await children(ctx, task.id) == []
+    assert not [message for message in await messages(ctx, task.id) if message.text == "task_started"]
+    saved = await load(ctx, task.id)
+    assert saved.status == TaskStatus.NEEDS_REVIEW and saved.total_tokens == 5
+
+
+async def test_a_launch_the_limit_refuses_is_not_sent_to_the_solver(runner, solver):
+    ctx, _, start = runner
+    ctx.config.teams.max_delegated_tasks_per_task = 1
+    refused = []
+
+    async def backend(request):
+        if request.session_key != request.task.id:
+            yield result("Reviewed", session="worker-session")
+            return
+        await ctx.teams.subagents.create(request.task.id, MEMBER, description="First", prompt="Read")
+        try:
+            await ctx.teams.subagents.create(request.task.id, MEMBER, description="Second", prompt="Read")
+        except ValueError as exc:
+            refused.append(str(exc))
+        await ctx.teams.subagents.wait(request.task.id, MEMBER, timeout=3)
+        yield result("Budget respected")
+
+    task, job = await start(backend)
+    await asyncio.wait_for(job, 8)
+    assert len(refused) == 1 and "launch limit" in refused[0]
+    assert len(solver.requests) == 1
+    assert len(await children(ctx, task.id)) == 1
+
+
+async def test_cancel_during_evaluation_leaves_no_worker_and_releases_the_run(runner, monkeypatch):
+    ctx, _, start = runner
+    evaluating = asyncio.Event()
+
+    async def wait_for_solver(*_args, **_kwargs):
+        evaluating.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(subagents_module, "solve_effort", wait_for_solver)
+
+    async def backend(request):
+        await ctx.teams.subagents.create(request.task.id, MEMBER, description="Spawn", prompt="Work")
+        yield result()
+
+    task, job = await start(backend)
+    await asyncio.wait_for(evaluating.wait(), 5)
+    # The evaluation holds no run lock, so stopping the parent does not wait for it.
+    await asyncio.wait_for(ctx.teams.cancel_task(task.id), 5)
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(job, 5)
+    assert await children(ctx, task.id) == []
+    assert not ctx.teams.subagents.runs
 
 
 async def test_subagent_receives_required_materials_with_its_first_message(runner):

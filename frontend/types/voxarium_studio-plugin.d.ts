@@ -32,6 +32,11 @@ export interface VoxariumStudioApi {
   nodeTypes(): Promise<{ node_types: object[] }>
   pluginSettings(id: string): Promise<{ settings: Record<string, unknown> }>
   savePluginSettings(id: string, settings: Record<string, unknown>): Promise<unknown>
+  /**
+   * The agent backends and the suggested models per backend — the `options` prop of
+   * `components.ModelSelector`. Pass it through whole; do not read its fields.
+   */
+  memberOptions(): Promise<object>
   installPluginEnv(id: string, force?: boolean): Promise<unknown>
 }
 
@@ -114,6 +119,20 @@ export interface PluginRuntime {
       key: string,
       params?: Record<string, string | number>,
     ) => string
+  }
+  /**
+   * The Studio's own widgets, so a plugin's controls look and behave like the app's.
+   *
+   * `ModelSelector` is the backend/model picker of members, tasks and chats — one row: an
+   * icon per agent backend, then the suggested models for the chosen one, with "Something
+   * else…" for typing any id. Props: `backend` and `model` (string or null), `options` (from
+   * `api.memberOptions()`; null while loading), and optionally `backends` — the backend ids
+   * to offer, e.g. `['claude_code']` when the plugin's model call goes through `claude -p` —
+   * plus `disabled` and `label`. It emits `change(backend, model)`; `model` is `''` for the
+   * backend's default model. Mount it with `h(components.ModelSelector, { …, onChange })`.
+   */
+  components: {
+    ModelSelector: Component
   }
 }
 

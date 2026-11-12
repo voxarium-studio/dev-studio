@@ -43,7 +43,8 @@ def build_subagent_tools(
                     description=required(args, "description"),
                     backend=optional(args, "backend"),
                     model=optional(args, "model"),
-                    effort=optional(args, "effort"),
+                    # §10.11: no `effort` — Effort Solver computes it, and one sent by a
+                    # caller that still remembers the old schema is not read.
                 )
             elif method == "list":
                 result = await service.list(task_id, member_id)
@@ -75,9 +76,11 @@ def build_subagent_tools(
         "spawn_subagent",
         "Start a Studio-managed subagent for a bounded part of your current task, on any "
         "registered agent backend. It shares your working directory and permitted write "
-        "scope. Give separate file ownership to parallel workers. Backend, model and effort "
-        "default to your run; a different backend requires an explicit compatible model. "
-        "Returns immediately with an ID. Use wait_subagents before finish_task. "
+        "scope. Give separate file ownership to parallel workers. Backend and model default "
+        "to your run; a different backend requires an explicit compatible model. You do not "
+        "choose its effort: Effort Solver scores the description and prompt and sets it, so "
+        "make them complete. Returns its ID and chosen effort once that evaluation is done, "
+        "without waiting for the work. Use wait_subagents before finish_task. "
         "Children cannot spawn children or change the task board.",
         {
             "type": "object",
@@ -86,7 +89,6 @@ def build_subagent_tools(
                 "prompt": {"type": "string", "description": "Complete assignment, context and expected result."},
                 "backend": {"type": "string", "description": "Optional registered backend, e.g. claude_code, codex, qwen."},
                 "model": {"type": "string", "description": "Optional model; required when changing backend."},
-                "effort": {"type": "string", "description": "Optional effort supported by the selected backend/model."},
             },
             "required": ["description", "prompt"],
         },
@@ -96,8 +98,9 @@ def build_subagent_tools(
 
     @tool(
         "list_subagents",
-        "List your current task's Studio-managed subagents, including status, result, "
-        "token count and API cost. Their spend is also included in the parent task totals.",
+        "List your current task's Studio-managed subagents, including status, result, the "
+        "effort chosen for each, token count and API cost. Their spend is also included in "
+        "the parent task totals.",
         {"type": "object", "properties": {}},
     )
     async def list_subagents(args: dict[str, Any]) -> dict[str, Any]:

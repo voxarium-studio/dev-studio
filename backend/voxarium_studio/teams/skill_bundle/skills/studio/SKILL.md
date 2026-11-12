@@ -86,8 +86,11 @@ Use **`spawn_subagent`** for parallel or smaller pieces of the task you are curr
 Give each child a short `description` and a self-contained `prompt`: context, exact file
 ownership, expected result and checks. It starts immediately when an agent slot is available
 and returns its `id` (pass it as `subagent_id` to controls); it does not create a task on the board or require a team route.
-The default backend, model and effort are those of your run. You may choose another registered
-`backend`, but must also provide a compatible `model` when changing backends.
+The default backend and model are those of your run. You may choose another registered
+`backend`, but must also provide a compatible `model` when changing backends. You do not set
+a child's effort: the team's Effort Solver scores its `description` and `prompt` before it
+starts and chooses one of `low`, `medium`, `high`, `xhigh`, `max`, returned with the child and
+shown by `list_subagents`. If that evaluation fails, no child is started — retry the call.
 
 Children share your working directory, checkout, permitted tools and declared write scope.
 Assign disjoint files to parallel writers and integrate their results yourself; a subagent

@@ -47,6 +47,8 @@ import { useDocsStore } from '@/stores/docs'
 import { useTeamsStore } from '@/stores/teams'
 
 import ConversationPanel from '@/components/teams/ConversationPanel.vue'
+import SessionStatus from '@/components/teams/SessionStatus.vue'
+import { subagents } from '@/lib/subagents'
 import ChatList from './ChatList.vue'
 import ChatHeaderChips from './ChatHeaderChips.vue'
 import ProducerControls from './ProducerControls.vue'
@@ -76,6 +78,15 @@ function memberOf(id: string | null): TeamMember | null {
 
 const activeMember = computed(() => memberOf(chat.activeChat?.member_id ?? null))
 const readOnlyHistory = computed(() => chat.view === 'chat' && activeMember.value?.kind === 'human')
+
+/**
+ * The task dialog's Status column, on the Chats page only (§10.9): the popup is too narrow
+ * for a third column and the Producer page has its own task column. A chat has no declared
+ * write files and no commit, so only the session half — sub-agents, skills, MCP servers —
+ * is shown, read from the transcript exactly as a task's is.
+ */
+const showStatus = computed(() => fullscreen.value && chat.view === 'chat' && Boolean(chat.activeChatId))
+const chatSubagents = computed(() => (showStatus.value ? subagents(chat.activeMessages) : []))
 const newMember = computed(() => memberOf(chat.newMemberId))
 
 const producerName = computed(() => (chat.view === 'new' ? newMember.value : activeMember.value)?.name ?? t('chat.theMember'))
@@ -621,6 +632,11 @@ onBeforeUnmount(() => {
           </AttachmentPicker>
         </footer>
         </div>
+        <!-- Full height beside the conversation, as in the task dialog; dropped below `lg`,
+             where three columns would leave the transcript too narrow to read. -->
+        <aside v-if="showStatus" class="w-[298px] shrink-0 border-l border-line max-lg:hidden">
+          <SessionStatus :messages="chat.activeMessages" :subagents="chatSubagents" />
+        </aside>
       </section>
       </Transition>
 

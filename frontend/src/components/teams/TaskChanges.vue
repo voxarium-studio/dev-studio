@@ -27,15 +27,20 @@
  * cheap model wrote (editable, since it is a draft), and the files. The button commits
  * through whatever version control the project is under; nothing here names git.
  *
+ * The file list folds under its heading like the Status column's other lists, and starts folded
+ * (`lib/fold-state.ts`); the count, the refresh button, a load error and the Commit section stay
+ * in view either way.
+ *
  * Selection is owned by the parent: picking a file swaps what the main pane shows, and
  * that is a decision about the dialog rather than about this list.
  */
-import { FileDiff, GitCommitHorizontal, Loader2, RefreshCw, Sparkles } from 'lucide-vue-next'
+import { ChevronDown, FileDiff, GitCommitHorizontal, Loader2, RefreshCw, Sparkles } from 'lucide-vue-next'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import { api } from '@/api/client'
 import type { TaskChanges, TaskCommitProposal, VcsCommitResult, VcsFileChange } from '@/api/types'
 import { t } from '@/i18n'
+import { rememberedFold } from '@/lib/fold-state'
 import { taskTempChanged } from '@/lib/task-temp'
 import { useSessionStore } from '@/stores/session'
 import { VCS_MARKS } from '@/stores/vcs'
@@ -52,6 +57,7 @@ const emit = defineEmits<{ select: [string | null] }>()
 const session = useSessionStore()
 
 const changes = ref<TaskChanges | null>(null)
+const open = rememberedFold('files')
 const loading = ref(false)
 const error = ref<string | null>(null)
 
@@ -279,12 +285,21 @@ const commitNote = computed(() => {
 <template>
   <section class="flex h-full min-h-0 w-full flex-col bg-canvas">
     <!-- A subsection of the Status column (§10.4), worded like the ones above it. -->
-    <header class="flex shrink-0 items-center gap-1.5 px-3 pt-2 pb-1">
-      <FileDiff class="size-3 shrink-0 text-faint" />
-      <span class="flex-1 truncate text-small font-medium text-faint">
-        {{ changes?.source === 'tools' ? t('tasks.changes.touched') : t('tasks.changes.changed') }}
-        <span v-if="changes" class="ml-1 font-mono">{{ rows.length }}</span>
-      </span>
+    <header class="flex shrink-0 items-center gap-1 px-3 pt-2 pb-1">
+      <button
+        type="button"
+        class="flex min-w-0 flex-1 items-center gap-1.5 rounded-sm py-0.5 text-small font-medium text-faint hover:bg-hover hover:text-primary"
+        :aria-expanded="open"
+        data-files-toggle
+        @click="open = !open"
+      >
+        <FileDiff class="size-3 shrink-0" />
+        <span class="truncate">
+          {{ changes?.source === 'tools' ? t('tasks.changes.touched') : t('tasks.changes.changed') }}
+        </span>
+        <span v-if="changes" class="font-mono">{{ rows.length }}</span>
+        <ChevronDown class="vxs-chevron ml-auto size-3.5 shrink-0" :class="open ? 'rotate-180' : ''" />
+      </button>
       <button
         class="grid size-5 shrink-0 place-items-center rounded-sm text-faint hover:bg-hover hover:text-primary"
         :title="t('tasks.changes.refresh')"
@@ -296,126 +311,130 @@ const commitNote = computed(() => {
       </button>
     </header>
 
+    <!-- Folded, the list gives its height up and the Commit section stays at the bottom:
+         the draft is where a reviewer ends, wherever the list was left. -->
     <div class="min-h-0 flex-1 overflow-y-auto py-1">
       <p v-if="error" class="px-3 py-2 text-small text-danger">{{ error }}</p>
       <p v-else-if="changes?.error" class="px-3 py-2 text-small text-warning">
         {{ changes.error }}
       </p>
 
-      <template v-for="group in groups" :key="group.key">
-        <!-- All headings always, so an empty "Outside project" says the task stayed home
-             rather than leaving the reader to infer it from a heading that is not there. -->
+      <template v-if="open">
+        <template v-for="group in groups" :key="group.key">
+          <!-- All headings always, so an empty "Outside project" says the task stayed home
+               rather than leaving the reader to infer it from a heading that is not there. -->
+          <p
+            class="flex items-baseline gap-1.5 px-3 pt-2 pb-0.5 text-small font-medium text-faint"
+            :title="
+              group.key === 'outside'
+                ? t('tasks.changes.group.outsideHint', { workdir: changes?.workdir ?? '' })
+                : group.key === 'studio'
+                  ? `${changes?.root ?? ''}/.voxarium_studio/`
+                  : group.key === 'temp'
+                    ? t('tasks.changes.group.tempHint', { path: changes?.temp_root ?? '' })
+                    : changes?.workdir
+            "
+          >
+            <span>{{ group.label }}</span>
+            <span class="font-mono">{{ group.rows.length }}</span>
+          </p>
+
+          <button
+            v-for="row in group.rows"
+            :key="row.path"
+            class="flex w-full items-baseline gap-2 px-3 py-1 text-left hover:bg-hover"
+            :class="selected === row.path ? 'bg-active' : ''"
+            :title="
+              !row.temp && changes?.source === 'workspace'
+                ? t('tasks.changes.rowTitle', { kind: row.mark.label, path: row.path })
+                : row.path
+            "
+            @click="emit('select', selected === row.path ? null : row.path)"
+          >
+            <!-- Only where a kind was actually established. The transcript source knows a file
+                 was written and nothing more, and a `?` down the whole column reads as a
+                 question about each file rather than about the source. -->
+            <span
+              v-if="!row.temp && changes?.source === 'workspace'"
+              class="w-2 shrink-0 font-mono text-small"
+              :class="row.mark.class"
+            >
+              {{ row.mark.letter }}
+            </span>
+            <!-- The name alone; the path is the row's tooltip. -->
+            <span
+              class="min-w-0 flex-1 truncate"
+              :class="row.kind === 'deleted' ? 'text-faint line-through' : ''"
+            >
+              {{ row.name }}
+            </span>
+            <span
+              v-if="row.evidence === 'observed' || row.evidence === 'tools_and_observed'"
+              class="shrink-0 text-small text-faint"
+              :title="t(row.evidence === 'observed' ? 'tasks.changes.observedHint' : 'tasks.changes.bothHint')"
+            >
+              {{ t(row.evidence === 'observed' ? 'tasks.changes.observed' : 'tasks.changes.both') }}
+            </span>
+            <span class="shrink-0 font-mono text-small" :class="countClass(row)">
+              <template v-if="row.binary">{{ t('tasks.changes.binary') }}</template>
+              <template v-else>
+                <span v-if="row.insertions" class="text-success">+{{ row.insertions }}</span>
+                <span v-if="row.deletions" class="ml-1 text-danger">−{{ row.deletions }}</span>
+              </template>
+            </span>
+          </button>
+
+          <p
+            v-if="!group.rows.length && !loading && !error"
+            class="px-3 pb-1 text-small text-faint"
+          >
+            <template v-if="group.key !== 'project' || rows.length">
+              {{ t('tasks.changes.group.empty') }}
+            </template>
+            <template v-else-if="changes?.source === 'tools'">
+              {{ t('tasks.changes.noneWritten') }}
+            </template>
+            <template v-else>{{ t('tasks.changes.noneChanged') }}</template>
+          </p>
+        </template>
+
         <p
-          class="flex items-baseline gap-1.5 px-3 pt-2 pb-0.5 text-small font-medium text-faint"
-          :title="
-            group.key === 'outside'
-              ? t('tasks.changes.group.outsideHint', { workdir: changes?.workdir ?? '' })
-              : group.key === 'studio'
-                ? `${changes?.root ?? ''}/.voxarium_studio/`
-                : group.key === 'temp'
-                  ? t('tasks.changes.group.tempHint', { path: changes?.temp_root ?? '' })
-                  : changes?.workdir
-          "
+          v-if="rows.some((row) => row.evidence === 'observed')"
+          class="border-t border-line-subtle px-3 py-2 text-small text-faint"
         >
-          <span>{{ group.label }}</span>
-          <span class="font-mono">{{ group.rows.length }}</span>
+          {{ t('tasks.changes.observedHint') }}
+        </p>
+        <p v-for="warning in changes?.observation_errors ?? []" :key="warning" class="px-3 py-2 text-small text-warning">
+          {{ warning }}
+        </p>
+        <p v-for="warning in changes?.temp_errors ?? []" :key="`temp:${warning}`" class="px-3 py-2 text-small text-warning">
+          {{ warning }}
+        </p>
+        <p v-if="changes?.reason" class="border-t border-line-subtle px-3 py-2 text-small text-faint">
+          {{ changes.reason }}
         </p>
 
-        <button
-          v-for="row in group.rows"
-          :key="row.path"
-          class="flex w-full items-baseline gap-2 px-3 py-1 text-left hover:bg-hover"
-          :class="selected === row.path ? 'bg-active' : ''"
-          :title="
-            !row.temp && changes?.source === 'workspace'
-              ? t('tasks.changes.rowTitle', { kind: row.mark.label, path: row.path })
-              : row.path
-          "
-          @click="emit('select', selected === row.path ? null : row.path)"
-        >
-          <!-- Only where a kind was actually established. The transcript source knows a file
-               was written and nothing more, and a `?` down the whole column reads as a
-               question about each file rather than about the source. -->
-          <span
-            v-if="!row.temp && changes?.source === 'workspace'"
-            class="w-2 shrink-0 font-mono text-small"
-            :class="row.mark.class"
-          >
-            {{ row.mark.letter }}
-          </span>
-          <!-- The name alone; the path is the row's tooltip. -->
-          <span
-            class="min-w-0 flex-1 truncate"
-            :class="row.kind === 'deleted' ? 'text-faint line-through' : ''"
-          >
-            {{ row.name }}
-          </span>
-          <span
-            v-if="row.evidence === 'observed' || row.evidence === 'tools_and_observed'"
-            class="shrink-0 text-small text-faint"
-            :title="t(row.evidence === 'observed' ? 'tasks.changes.observedHint' : 'tasks.changes.bothHint')"
-          >
-            {{ t(row.evidence === 'observed' ? 'tasks.changes.observed' : 'tasks.changes.both') }}
-          </span>
-          <span class="shrink-0 font-mono text-small" :class="countClass(row)">
-            <template v-if="row.binary">{{ t('tasks.changes.binary') }}</template>
-            <template v-else>
-              <span v-if="row.insertions" class="text-success">+{{ row.insertions }}</span>
-              <span v-if="row.deletions" class="ml-1 text-danger">−{{ row.deletions }}</span>
-            </template>
-          </span>
-        </button>
-
         <p
-          v-if="!group.rows.length && !loading && !error"
-          class="px-3 pb-1 text-small text-faint"
+          v-if="changes?.branch || totals"
+          class="border-t border-line-subtle px-3 py-1.5 text-small text-faint"
         >
-          <template v-if="group.key !== 'project' || rows.length">
-            {{ t('tasks.changes.group.empty') }}
-          </template>
-          <template v-else-if="changes?.source === 'tools'">
-            {{ t('tasks.changes.noneWritten') }}
-          </template>
-          <template v-else>{{ t('tasks.changes.noneChanged') }}</template>
+          <span v-if="changes?.branch" class="flex items-center gap-1.5">
+            <FileDiff class="size-3 shrink-0 text-info" />
+            <span class="truncate font-mono text-info" :title="changes.root">
+              {{ changes.branch }}
+            </span>
+          </span>
+          <!-- "isolated checkout" is a statement about where the figures were measured, so
+               the transcript's summed requests do not carry it. -->
+          <span v-if="totals" class="block">
+            <span class="text-success">+{{ totals.insertions }}</span>
+            <span class="ml-1 text-danger">−{{ totals.deletions }}</span>
+            <span v-if="changes?.source === 'workspace'" class="ml-1">
+              {{ t('tasks.changes.isolated') }}
+            </span>
+          </span>
         </p>
       </template>
-
-      <p
-        v-if="rows.some((row) => row.evidence === 'observed')"
-        class="border-t border-line-subtle px-3 py-2 text-small text-faint"
-      >
-        {{ t('tasks.changes.observedHint') }}
-      </p>
-      <p v-for="warning in changes?.observation_errors ?? []" :key="warning" class="px-3 py-2 text-small text-warning">
-        {{ warning }}
-      </p>
-      <p v-for="warning in changes?.temp_errors ?? []" :key="`temp:${warning}`" class="px-3 py-2 text-small text-warning">
-        {{ warning }}
-      </p>
-      <p v-if="changes?.reason" class="border-t border-line-subtle px-3 py-2 text-small text-faint">
-        {{ changes.reason }}
-      </p>
-
-      <p
-        v-if="changes?.branch || totals"
-        class="border-t border-line-subtle px-3 py-1.5 text-small text-faint"
-      >
-        <span v-if="changes?.branch" class="flex items-center gap-1.5">
-          <FileDiff class="size-3 shrink-0 text-info" />
-          <span class="truncate font-mono text-info" :title="changes.root">
-            {{ changes.branch }}
-          </span>
-        </span>
-        <!-- "isolated checkout" is a statement about where the figures were measured, so
-             the transcript's summed requests do not carry it. -->
-        <span v-if="totals" class="block">
-          <span class="text-success">+{{ totals.insertions }}</span>
-          <span class="ml-1 text-danger">−{{ totals.deletions }}</span>
-          <span v-if="changes?.source === 'workspace'" class="ml-1">
-            {{ t('tasks.changes.isolated') }}
-          </span>
-        </span>
-      </p>
     </div>
 
     <!-- The draft, pinned under the list so it stays in reach however long the list is. -->

@@ -32,11 +32,18 @@ def _load(module_name: str, file_name: str):
     spec = importlib.util.spec_from_file_location(module_name, PLUGIN_ROOT / file_name)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    # As the loader does: the plugin root is on sys.path while the entry module executes,
+    # so its sibling `graphify_runtimes` imports.
+    sys.path.insert(0, str(PLUGIN_ROOT))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(PLUGIN_ROOT))
     return module
 
 
 graphify = _load("voxarium_studio_test_graphify_plugin", "plugin.py")
+runtimes = graphify.runtimes
 
 
 # --------------------------------------------------------------------------- a fake host
@@ -560,6 +567,305 @@ async def test_a_failing_code_pass_never_reaches_the_documents(tmp_path: Path, c
     status = await graphify.index(FakeHost(tmp_path), "test")
     assert len(cli.calls) == 1
     assert status["documents"]["ran"] is False and status["error"].startswith("graphify extract exited")
+
+
+# --------------------------------------------------------------------------- the documents' runtime
+
+
+def test_an_old_setting_with_only_a_model_reads_as_claude_code() -> None:
+    """Before the page could pick a backend it saved a model alone, and that model was a
+    Claude Code one; nothing at all is the old default, Claude Code with haiku."""
+    assert graphify.documents_backend({}) == "claude_code"
+    assert graphify.documents_model({}) == "haiku"
+    assert graphify.documents_backend({"documents_model": "sonnet"}) == "claude_code"
+    assert graphify.documents_model({"documents_model": "sonnet"}) == "sonnet"
+    assert graphify.documents_backend({"documents_backend": "klingon"}) == "claude_code", "unknown means the default"
+    assert graphify.documents_backend({"documents_backend": " Codex "}) == "codex"
+
+
+def test_codex_and_qwen_default_to_their_own_configured_model() -> None:
+    assert graphify.documents_model({"documents_backend": "codex"}) == ""
+    assert graphify.documents_model({"documents_backend": "codex", "documents_model": "gpt-5.5"}) == "gpt-5.5"
+    assert graphify.documents_model({"documents_backend": "qwen", "documents_model": "qwen3-coder-plus"}) == "qwen3-coder-plus"
+    # A Claude alias left from before the backend was switched means nothing to them.
+    assert graphify.documents_model({"documents_backend": "codex", "documents_model": "haiku"}) == ""
+    assert graphify.documents_model({"documents_backend": "qwen", "documents_model": "sonnet"}) == ""
+    assert graphify.documents_model({"documents_backend": "qwen", "documents_model": "gpt-5"}) == ""
+
+
+@pytest.mark.parametrize(
+    ("backend", "expected"),
+    [
+        ("claude_code", ["--backend", "claude-cli"]),
+        ("codex", ["--backend", "openai", "--api-timeout", "1800", "--max-concurrency", "2"]),
+        ("qwen", ["--backend", "openai", "--api-timeout", "1800", "--max-concurrency", "2"]),
+    ],
+)
+def test_the_documents_command_follows_the_chosen_backend(tmp_path: Path, backend: str, expected: list[str]) -> None:
+    docs = tmp_path / ".voxarium_studio" / "docs"
+    command = graphify.documents_command({"documents_backend": backend}, tmp_path, docs)
+    assert command[:5] == ["graphify", "extract", str(docs), "--out", str(graphify.documents_out(tmp_path))]
+    assert command[5 : 5 + len(expected)] == expected
+    assert command[5 + len(expected)] == "--exclude"
+    assert "--force" not in command and "--code-only" not in command
+
+
+@pytest.mark.parametrize("backend", ["claude_code", "codex", "qwen"])
+def test_no_child_runs_as_a_nested_agent_session(monkeypatch, backend: str) -> None:
+    for marker in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX", "CODEX_THREAD_ID", "QWEN_CODE"):
+        monkeypatch.setenv(marker, "1")
+    monkeypatch.setenv("CODEX_HOME", "C:/codex-home")
+    env = graphify.subprocess_env({"documents_backend": backend})
+    assert not {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX", "CODEX_THREAD_ID", "QWEN_CODE"} & set(env)
+    assert env["CODEX_HOME"] == "C:/codex-home", "only the markers go, not the CLI's own configuration"
+    assert ("GRAPHIFY_CLAUDE_CLI_MODEL" in env) == (backend == "claude_code")
+
+
+def test_the_cli_is_found_as_the_teams_backends_find_it(monkeypatch) -> None:
+    from voxarium_studio.teams.backends import codex, qwen
+
+    monkeypatch.setattr(codex, "_launcher", lambda: ["C:/npm/node_modules/@openai/codex/codex.exe"])
+    monkeypatch.setattr(qwen, "_launcher", lambda: None)
+    assert graphify.documents_launcher(runtimes.RUNTIMES["codex"]) == ["C:/npm/node_modules/@openai/codex/codex.exe"]
+    assert graphify.documents_launcher(runtimes.RUNTIMES["qwen"]) is None
+    assert graphify.documents_cli({"documents_backend": "codex"}) == "C:/npm/node_modules/@openai/codex/codex.exe"
+
+
+@pytest.mark.parametrize(
+    ("backend", "command", "hint"),
+    [("codex", "codex", "codex login"), ("qwen", "qwen", "@qwen-code/qwen-code")],
+)
+async def test_a_missing_cli_skips_the_documents_and_names_it(
+    tmp_path: Path, cli, monkeypatch, backend: str, command: str, hint: str
+) -> None:
+    with_documents(tmp_path)
+    monkeypatch.setattr(graphify, "documents_launcher", lambda runtime: None)
+    status = await graphify.index(FakeHost(tmp_path, settings={"documents_backend": backend}), "test")
+    assert [call["args"][0] for call in cli.calls] == ["extract"], "the code pass still runs"
+    assert status["error"] is None and status["progress"]["percent"] == 100.0
+    skipped = status["documents"]["skipped"]
+    assert skipped.startswith(f"the `{command}` command is not on PATH") and hint in skipped
+
+
+def fake_runner(seen: list[tuple[str, str]], answer: str = '{"nodes": [], "edges": []}'):
+    async def run(system: str, prompt: str) -> str:
+        seen.append((system, prompt))
+        return answer
+
+    return run
+
+
+async def post(url: str, body: dict | bytes, token: str | None, path: str = "/chat/completions") -> tuple[int, dict]:
+    """A bare HTTP/1.1 request, as graphify's OpenAI client would send it."""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    reader, writer = await asyncio.open_connection(parts.hostname, parts.port)
+    payload = body if isinstance(body, bytes) else json.dumps(body).encode()
+    head = f"POST {parts.path}{path} HTTP/1.1\r\nHost: {parts.netloc}\r\nContent-Type: application/json\r\n"
+    if token is not None:
+        head += f"Authorization: Bearer {token}\r\n"
+    head += f"Content-Length: {len(payload)}\r\n\r\n"
+    writer.write(head.encode() + payload)
+    await writer.drain()
+    raw = await reader.read()
+    writer.close()
+    status_line, _, rest = raw.partition(b"\r\n")
+    _, _, body_bytes = rest.partition(b"\r\n\r\n")
+    return int(status_line.split()[1]), json.loads(body_bytes.decode())
+
+
+CHAT = {
+    "model": "gpt-5.5",
+    "messages": [
+        {"role": "system", "content": "You are a graphify extraction subagent."},
+        {"role": "user", "content": [{"type": "text", "text": "<file>dash.md</file>"}]},
+    ],
+    "max_completion_tokens": 16384,
+    "stream": False,
+}
+
+
+async def test_the_endpoint_answers_an_openai_chat_completion_through_the_cli() -> None:
+    seen: list[tuple[str, str]] = []
+    rule = graphify.language_rule("source")
+    async with runtimes.DocumentsEndpoint(fake_runner(seen), model="gpt-5.5", rule=rule, label="Codex") as endpoint:
+        assert endpoint.base_url.startswith("http://127.0.0.1:") and endpoint.base_url.endswith("/v1")
+        status, body = await post(endpoint.base_url, CHAT, endpoint.token)
+    assert status == 200
+    assert body["object"] == "chat.completion" and body["model"] == "gpt-5.5"
+    assert body["choices"][0]["message"] == {"role": "assistant", "content": '{"nodes": [], "edges": []}'}
+    assert body["choices"][0]["finish_reason"] == "stop"
+    system, prompt = seen[0]
+    assert system.startswith("You are a graphify extraction subagent.")
+    assert system.endswith(rule.strip()), "the language rule rides every system prompt"
+    assert prompt == "<file>dash.md</file>"
+    assert endpoint.answered == 1
+
+
+async def test_the_endpoint_refuses_without_the_token() -> None:
+    seen: list[tuple[str, str]] = []
+    async with runtimes.DocumentsEndpoint(fake_runner(seen), model="m") as endpoint:
+        no_token = await post(endpoint.base_url, CHAT, None)
+        wrong = await post(endpoint.base_url, CHAT, "not-the-token")
+        elsewhere = await post(endpoint.base_url, CHAT, endpoint.token, path="/embeddings")
+    assert no_token[0] == 401 and no_token[1]["error"]["type"] == "invalid_api_key"
+    assert wrong[0] == 401
+    assert elsewhere[0] == 404
+    assert seen == [], "nothing reached the CLI"
+
+
+async def test_the_endpoint_reports_a_cli_failure_as_a_server_error() -> None:
+    lines: list[str] = []
+
+    async def failing(system: str, prompt: str) -> str:
+        raise runtimes.CliError("codex exec exited with 1: not logged in")
+
+    async with runtimes.DocumentsEndpoint(failing, model="m", label="Codex", on_line=lines.append) as endpoint:
+        status, body = await post(endpoint.base_url, CHAT, endpoint.token)
+        bad = await post(endpoint.base_url, b"{not json", endpoint.token)
+    assert status == 502 and "not logged in" in body["error"]["message"]
+    assert bad[0] == 400
+    assert lines == ["Codex gave no answer: codex exec exited with 1: not logged in"]
+
+
+async def test_the_endpoint_lives_only_as_long_as_the_pass() -> None:
+    async with runtimes.DocumentsEndpoint(fake_runner([]), model="m") as endpoint:
+        url = endpoint.base_url
+    with pytest.raises(OSError):
+        await post(url, CHAT, endpoint.token)
+
+
+def test_graphify_is_pointed_at_the_endpoint_not_at_openai() -> None:
+    endpoint = runtimes.DocumentsEndpoint(fake_runner([]), model="", token="secret")
+    endpoint.port = 4321
+    env = endpoint.graphify_env()
+    assert env["OPENAI_BASE_URL"] == "http://127.0.0.1:4321/v1"
+    assert env["OPENAI_API_KEY"] == "secret"
+    assert env["OPENAI_MODEL"] == env["GRAPHIFY_OPENAI_MODEL"] == "default", "graphify needs a name; the CLI picks"
+    assert "127.0.0.1" in env["NO_PROXY"].split(",")
+    assert env["GRAPHIFY_MAX_RETRIES"] == "1", "a retry is a whole agent run"
+
+
+def test_codex_reads_one_chunk_headless_with_graphifys_prompt_as_its_instructions(tmp_path: Path) -> None:
+    argv = runtimes.codex_command(["codex.exe"], "gpt-5.5", tmp_path / "i.md", tmp_path / "out.txt")
+    assert argv[:2] == ["codex.exe", "exec"]
+    assert {"--skip-git-repo-check", "--ephemeral"} <= set(argv)
+    assert argv[argv.index("--sandbox") + 1] == "read-only"
+    assert f"model_instructions_file={json.dumps(str(tmp_path / 'i.md'))}" in argv
+    assert argv[argv.index("--output-last-message") + 1] == str(tmp_path / "out.txt")
+    assert argv[argv.index("-m") + 1] == "gpt-5.5" and argv[-1] == "-"
+    assert "-m" not in runtimes.codex_command(["codex.exe"], "", tmp_path / "i.md", tmp_path / "o.txt")
+
+
+def test_qwen_reads_one_chunk_headless_and_answers_from_its_result_frame() -> None:
+    argv, stdin = runtimes.qwen_command(["node", "qwen.js"], "qwen3-coder-plus", "SYSTEM", "CHUNK")
+    assert argv[:2] == ["node", "qwen.js"] and stdin == "CHUNK"
+    assert argv[argv.index("--approval-mode") + 1] == "plan"
+    assert argv[argv.index("--model") + 1] == "qwen3-coder-plus"
+    assert argv[argv.index("--system-prompt") + 1] == "SYSTEM"
+    long_argv, long_stdin = runtimes.qwen_command(["qwen"], "", "x" * 40_000, "CHUNK")
+    assert "--system-prompt" not in long_argv and "--model" not in long_argv
+    assert long_stdin.startswith("Instructions:\n" + "x" * 10) and long_stdin.endswith("CHUNK")
+
+    stream = "\n".join(
+        json.dumps(frame)
+        for frame in [
+            {"type": "system", "subtype": "init"},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "draft"}]}},
+            {"type": "result", "result": '{"nodes": []}', "is_error": False},
+        ]
+    )
+    assert runtimes.qwen_answer(stream) == '{"nodes": []}'
+    with pytest.raises(runtimes.CliError):
+        runtimes.qwen_answer(json.dumps({"type": "result", "is_error": True, "error": "quota"}))
+
+
+@pytest.mark.parametrize("language", ["source", "english"])
+async def test_codex_reads_the_documents_through_the_studios_endpoint(
+    tmp_path: Path, cli, monkeypatch, language: str
+) -> None:
+    """The documents pass reaches graphify's `openai` backend at the endpoint, which is up
+    for exactly that pass and hands the chunk to the CLI with the language rule."""
+    docs = with_documents(tmp_path)
+    monkeypatch.setattr(graphify, "documents_launcher", lambda runtime: ["C:/fake/codex.exe"])
+    seen: list[tuple[str, str]] = []
+    made: list[tuple] = []
+
+    def runner_for(runtime, prefix, model):
+        made.append((runtime.id, prefix, model))
+        return fake_runner(seen)
+
+    monkeypatch.setattr(runtimes, "runner_for", runner_for)
+    answers: list[int] = []
+    original = asyncio.create_subprocess_exec  # the `cli` fixture's fake
+
+    async def exec_and_ask(program, *args, **kwargs):
+        process = await original(program, *args, **kwargs)
+        env = kwargs.get("env") or {}
+        if "OPENAI_BASE_URL" in env:
+            status, _ = await post(env["OPENAI_BASE_URL"], CHAT, env["OPENAI_API_KEY"])
+            answers.append(status)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", exec_and_ask)
+    write_graph(tmp_path, DOC_NODES, [], path=graphify.documents_graph_file(tmp_path))
+    host = FakeHost(tmp_path, settings={"documents_backend": "codex", "documents_model": "gpt-5.5", "documents_language": language})
+
+    status = await graphify.index(host, "test")
+
+    assert [call["args"][0] for call in cli.calls] == ["extract", "extract", "merge-graphs"]
+    documents = cli.calls[1]
+    assert documents["args"][1] == str(docs)
+    assert documents["args"][4:6] == ["--backend", "openai"]
+    assert documents["env"]["OPENAI_BASE_URL"].startswith("http://127.0.0.1:")
+    assert documents["env"]["GRAPHIFY_OPENAI_MODEL"] == "gpt-5.5"
+    assert "GRAPHIFY_CLAUDE_CLI_MODEL" not in documents["env"]
+    assert "OPENAI_BASE_URL" not in cli.calls[0]["env"], "the code pass never sees the endpoint"
+    assert answers == [200]
+    assert made == [("codex", ["C:/fake/codex.exe"], "gpt-5.5")]
+    assert seen[0][1] == "<file>dash.md</file>"
+    assert seen[0][0].endswith(graphify.language_rule(language).strip())
+    assert not (graphify.documents_out(tmp_path) / "CLAUDE.md").exists(), "Codex reads no CLAUDE.md"
+    assert status["error"] is None and status["documents"]["ran"] is True
+    assert any(line.startswith(f"[voxarium_studio] reading the documents in {docs} through Codex (gpt-5.5)") for line in status["log"])
+    assert "[voxarium_studio] Codex answered a chunk in 0 s" in status["log"]
+    # The endpoint was the pass's alone: it is gone now.
+    with pytest.raises(OSError):
+        await post(documents["env"]["OPENAI_BASE_URL"], CHAT, documents["env"]["OPENAI_API_KEY"])
+
+
+async def test_graphify_without_its_openai_extra_is_told_how_to_get_it(tmp_path: Path, cli, monkeypatch) -> None:
+    with_documents(tmp_path)
+    monkeypatch.setattr(graphify, "documents_launcher", lambda runtime: ["C:/fake/qwen"])
+    cli.script["queue"] = [
+        {"lines": ["[graphify extract] wrote D:/game/graphify-out/graph.json: 9 nodes, 8 edges, 1 communities"]},
+        {
+            "lines": [
+                "[graphify] chunk 1/1 failed: the 'openai' package is required for this backend but is not installed.",
+                "[graphify extract] error: all semantic chunks failed for backend 'openai' (1 uncached files)",
+            ],
+            "code": 0,
+        },
+    ]
+    status = await graphify.index(FakeHost(tmp_path, settings={"documents_backend": "qwen"}), "test")
+    assert len(cli.calls) == 2, "no merge of a pass that read nothing"
+    assert 'uv tool install "graphifyy[openai]" --force' in status["documents"]["error"]
+    assert status["error"].startswith("documents: graphify lacks the 'openai' package")
+
+
+async def test_the_status_names_the_chosen_cli(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(graphify, "documents_launcher", lambda runtime: ["node", "C:/npm/qwen.js"] if runtime.id == "qwen" else None)
+    monkeypatch.setattr(graphify, "resolve_executable", lambda settings: None)
+    status = await graphify.action_status(FakeHost(tmp_path, settings={"documents_backend": "qwen"}), {})
+    assert status["documents_backend"] == "qwen" and status["documents_backend_label"] == "Qwen Code"
+    assert status["documents_model"] == "" and status["documents_cli"] == "C:/npm/qwen.js"
+    assert status["documents_cli_command"] == "qwen" and status["documents_endpoint"] is True
+    assert status["documents_memory"] is None and status["documents_extra_hint"].startswith("uv tool install")
+    assert status["documents_command"][5:7] == ["--backend", "openai"]
+    old = await graphify.action_status(FakeHost(tmp_path, settings={"documents_model": "sonnet"}), {})
+    assert old["documents_backend"] == "claude_code" and old["documents_model"] == "sonnet"
+    assert old["documents_memory"].endswith("CLAUDE.md") and old["documents_endpoint"] is False
 
 
 def test_a_document_hit_is_relative_to_the_documents_folder(tmp_path: Path) -> None:

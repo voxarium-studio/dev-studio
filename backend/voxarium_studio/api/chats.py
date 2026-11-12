@@ -135,7 +135,8 @@ async def set_chat_model(chat_id: str, body: ChatModel, ctx: Ctx) -> dict[str, A
     return ctx.chats.to_json(chat)
 
 
-async def _retained_chat_context(chat_id: str, ctx: Ctx, view: ContextView) -> tuple[list[dict], dict]:
+async def _retained_chat_context(chat_id: str, ctx: Ctx, view: ContextView,
+                                 ) -> tuple[list[dict], dict, str | None]:
     async with ctx.db.session() as session:
         chat = await session.get(AgentChat, chat_id)
         if chat is None:
@@ -145,27 +146,30 @@ async def _retained_chat_context(chat_id: str, ctx: Ctx, view: ContextView) -> t
         messages = (await session.exec(select(AgentChatMessage).where(
             AgentChatMessage.chat_id == chat_id,
         ).order_by(AgentChatMessage.created_at, AgentChatMessage.id))).all()
-    return await read_context(snapshot, messages, member, chat.agent_session_id, view)
+    parts, metrics = await read_context(snapshot, messages, member, chat.agent_session_id, view)
+    return parts, metrics, chat.agent_session_id
 
 
 @router.get("/{chat_id}/context")
 async def get_chat_context(chat_id: str, ctx: Ctx, view: ContextView = "auto") -> dict[str, Any]:
-    parts, metrics = await _retained_chat_context(chat_id, ctx, view)
-    return inventory_response(chat_id, parts, metrics)
+    parts, metrics, session_id = await _retained_chat_context(chat_id, ctx, view)
+    return inventory_response(chat_id, parts, metrics, session_id)
 
 
 @router.get("/{chat_id}/context/fragments/{source_id}")
 async def get_chat_context_fragment(chat_id: str, source_id: int, ctx: Ctx,
                                     key: str = Query(pattern=r"^[a-f0-9]{64}$"),
                                     view: ContextView = "auto") -> dict[str, str]:
-    parts, _ = await _retained_chat_context(chat_id, ctx, view)
+    parts, _, _ = await _retained_chat_context(chat_id, ctx, view)
     return fragment_response(parts, source_id, key)
 
 
 @router.post("/{chat_id}/context/inspect")
 async def inspect_chat_context(chat_id: str, ctx: Ctx) -> dict[str, Any]:
-    await _chat_or_404(ctx, chat_id)
-    return await inspect_session(chat_id)
+    chat = await ctx.chats.get_chat(chat_id)
+    if chat is None:
+        raise HTTPException(404, f"No chat {chat_id!r}")
+    return await inspect_session(chat_id, chat.agent_session_id)
 
 
 @router.delete("/{chat_id}")

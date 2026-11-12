@@ -19,6 +19,10 @@
  */
 
 :root {
+  /* What the browser draws itself — a native `<select>`'s popup, a date picker — follows the
+     mode too; without it the popup stays light under the dark theme's light text. */
+  color-scheme: dark;
+
   /* ---------------------------------------------------------------- primitives
 
      The ramp the status vocabulary and a few fixed paints are drawn from (a scrollbar, the
@@ -307,6 +311,7 @@
 
 /* -------------------------------------------------------------------- light theme */
 [data-theme='light'] {
+  color-scheme: light;
   --vxs-bg-canvas: #f6f6f6;
   --vxs-bg-surface: #ffffff;
   --vxs-bg-elevated: #ffffff;

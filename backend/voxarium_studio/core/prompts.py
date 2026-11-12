@@ -50,10 +50,6 @@ SPECS: dict[str, PromptSpec] = {
     # --- who the member is (teams/agents.py) -------------------------------------
     # Baked into `.claude/agents/<member>.md` when the member runs under `--agent`,
     # appended to the run's system prompt otherwise — the same words either way (§10.3).
-    # The base leads the identity block of *every* member — the Producer included — and
-    # the member's Responsibility follows it. Empty by default, so nothing is sent until
-    # the project writes one on the Settings page.
-    "system_prompt_base": PromptSpec(""),
     "identity": PromptSpec(
         'You are {name}, working as {role} on the team "{team}".',
         placeholders=("name", "role", "team"),
@@ -123,17 +119,27 @@ SPECS: dict[str, PromptSpec] = {
     # §10.12: sent whenever project memory is on and the Studio's tools reach the run — also
     # when it is empty, because it is what asks the run to record what it learns. `{entries}`
     # is the index, one `- name — description` line per entry, capped by
-    # `teams.memory_index_chars`.
+    # `teams.memory_index_chars`. It names the Studio's tools and rules out the runtime's
+    # own memory on purpose: an agent that writes to its private notes instead leaves the
+    # rest of the team without the fact.
     "project_memory": PromptSpec(
-        "Project memory holds lasting facts about this project that the team recorded for "
-        "every agent: decisions, conventions, pitfalls, where things live. Each line below is "
-        "an entry's name and what it is about; read an entry with recall before relying on "
-        "it. When you learn something that future work on this project will need and that "
-        "the code and the documents do not already say, save it with remember: one fact per "
-        "entry, with a description that says when it matters. If an entry turns out to be "
-        "wrong or outdated, correct it with remember (replace) or remove it with forget. Do "
-        "not record task progress or anything only the current task needs.\n{entries}",
+        "Project memory holds the team's lasting facts about this project; its entries are "
+        "listed below. Work with it only through the Studio's tools, never your own memory "
+        "or notes files: recall an entry before relying on it, remember what future work "
+        "needs and the code and documents do not say (one fact per entry), forget what is "
+        "outdated. Never record task progress.\n{entries}",
         placeholders=("entries",),
+    ),
+    # §10.3: sent to a task run the Studio's tools reach — the subagent tools refuse a chat,
+    # which has no task to split. Delegation goes through the Studio's own subagents, which
+    # the task's transcript, cost and limits account for; the runtime's own agent or task
+    # tools are ruled out for the same reason.
+    "subagents": PromptSpec(
+        "Break the task into smaller parts that can run in parallel and delegate them to "
+        "subagents with the Studio's tools: start each with spawn_subagent, collect them "
+        "with wait_subagents, and read each result with get_subagent before using it. Never "
+        "use your own agent or task tools. If the task cannot be broken up that way, do not "
+        "create subagents."
     ),
     # Sent only when a graphify knowledge graph exists at the agent launch root — the
     # artifact, not the plugin, is the condition, so a graph somebody built by hand counts
@@ -410,7 +416,6 @@ class AgentPromptsConfig(BaseModel):
     ``PUT /api/settings`` like every other nested section.
     """
 
-    system_prompt_base: str | None = None
     identity: str | None = None
     identity_responsibility: str | None = None
     identity_manager: str | None = None
@@ -423,6 +428,7 @@ class AgentPromptsConfig(BaseModel):
     member_skills: str | None = None
     docs_location: str | None = None
     project_memory: str | None = None
+    subagents: str | None = None
     code_graph: str | None = None
     isolated_checkout: str | None = None
     outside_project: str | None = None

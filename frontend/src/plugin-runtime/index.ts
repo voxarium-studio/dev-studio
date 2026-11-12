@@ -21,6 +21,7 @@ import { api, rawFileBytes, rawFileUrl } from '@/api/client'
 import type { PreviewResult } from '@/api/types'
 import { createTranslator, locale, type Locale } from '@/i18n'
 import { onEvent } from '@/ws/connection'
+import ModelSelector from '@/components/ui/ModelSelector.vue'
 
 import { setNodeParams } from './node-params'
 
@@ -77,6 +78,14 @@ export interface PluginRuntime {
     locale: ComputedRef<Locale>
     translator: typeof createTranslator
   }
+  /**
+   * The Studio's own widgets, so a plugin's controls look and behave like the app's (§9.3).
+   * `ModelSelector` is the backend/model picker of members, tasks and chats; it takes
+   * `options` from `api.memberOptions()` and emits `change(backend, model)`.
+   */
+  components: {
+    ModelSelector: Component
+  }
 }
 
 export function createRuntime(pluginId: string): PluginRuntime {
@@ -119,5 +128,6 @@ export function createRuntime(pluginId: string): PluginRuntime {
     },
     action: (id, payload) => api.pluginAction(pluginId, id, payload),
     i18n: { locale, translator: createTranslator },
+    components: { ModelSelector },
   }
 }

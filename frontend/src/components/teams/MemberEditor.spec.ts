@@ -107,13 +107,13 @@ describe('member editor autosave', () => {
     const { app, state, roster } = await mount({ builtin: 'effort_solver' })
     expect(state.kindDisabled('human')).toBe(true)
     expect(state.kindDisabled('agent')).toBe(false)
-    expect(state.draft.effort_solver_weights).toEqual({ complexity: 2, creativity: 1.5, depth: 3, coverage: 2 })
+    expect(state.draft.effort_solver_weights).toEqual({ complexity: 1.5, creativity: 1.5, depth: 3, coverage: 2.5 })
     state.draft.effort_solver_weights.depth = 4.5
     await nextTick()
     await vi.advanceTimersByTimeAsync(600)
     await settle()
     expect(mocks.saveMember).toHaveBeenCalledExactlyOnceWith('team__artist', {
-      effort_solver_weights: { complexity: 2, creativity: 1.5, depth: 4.5, coverage: 2 },
+      effort_solver_weights: { complexity: 1.5, creativity: 1.5, depth: 4.5, coverage: 2.5 },
     })
     expect(roster.member.effort_solver_weights?.depth).toBe(4.5)
     expect(state.dirty).toBe(false)

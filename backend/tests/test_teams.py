@@ -3283,7 +3283,7 @@ async def test_every_run_opens_with_the_current_project_memory(teams: AppContext
     )
     await release(teams, first.id)
     await wait_for(first.id, timeout=20)
-    assert "Project memory holds lasting facts" in seen[0].system_prompt
+    assert "Project memory holds the team's lasting facts" in seen[0].system_prompt
     assert "(no entries yet)" in seen[0].system_prompt
 
     await teams.memory.write("build-uses-ue-5-4", description="Unreal 5.4 only", content="")

@@ -15,6 +15,7 @@
 import { Bot, ChevronDown } from 'lucide-vue-next'
 import { computed, ref, watch } from 'vue'
 
+import ModelEffortSlider from '@/components/ui/ModelEffortSlider.vue'
 import TokenUsageChip from '@/components/ui/TokenUsageChip.vue'
 import { t, type MessageKey } from '@/i18n'
 import { statusColor } from '@/lib/status'
@@ -156,8 +157,21 @@ function note(entry: Subagent): string {
           <span class="min-w-0 flex-1 truncate" :class="entry.status === 'running' ? '' : 'text-faint'">
             {{ entry.description }}
           </span>
-          <span class="ml-auto min-w-0 break-words text-right font-mono text-small text-faint">
-            {{ note(entry) }}
+          <!-- One unit, so the fixed-size effort control never drops to a line of its own:
+               in the narrow Status column the pair takes the second line and the note wraps
+               beside the control; where there is room it stays on the first. -->
+          <span class="ml-auto flex max-w-full min-w-0 items-center gap-2">
+            <span class="min-w-0 break-words text-right font-mono text-small text-faint">
+              {{ note(entry) }}
+            </span>
+            <!-- §10.11: the effort Effort Solver chose at spawn, on the control every other
+                 run's effort is read from (§10.3). A runtime's own sub-agent reports none. -->
+            <ModelEffortSlider
+              v-if="entry.effort"
+              :model-value="entry.effort"
+              :label="t('taskDetail.delegated.effort')"
+              readonly
+            />
           </span>
           <TokenUsageChip
             :input-tokens="entry.inputTokens"

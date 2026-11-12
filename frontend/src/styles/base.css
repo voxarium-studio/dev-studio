@@ -23,6 +23,15 @@ body {
   overflow: hidden; /* panes scroll individually; the shell itself never does */
 }
 
+/* A native `<select>`'s list. The preflight makes every select transparent and inherit the
+   text colour, and Windows paints the popup from the options themselves — so an unfilled select
+   opened onto light text over a white list. The options carry their own paint. */
+option,
+optgroup {
+  background-color: var(--vxs-bg-elevated);
+  color: var(--vxs-text-primary);
+}
+
 :focus-visible {
   outline: 2px solid var(--vxs-accent);
   outline-offset: 1px;

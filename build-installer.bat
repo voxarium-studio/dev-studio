@@ -15,9 +15,16 @@ for %%T in (node.exe npm.cmd uv.exe) do (
     )
 )
 
+rem npm ci reinstalls everything; skip it while node_modules still matches the lock file it
+rem was installed from (prepare-runtime.ps1 does the same for the frontend).
+fc /b package-lock.json node_modules\.studio-lock >nul 2>&1
+if not errorlevel 1 goto dependencies_ready
 echo Installing desktop dependencies...
 call npm.cmd ci --prefer-offline --no-audit --no-fund
 if errorlevel 1 goto failed
+copy /y package-lock.json node_modules\.studio-lock >nul
+if errorlevel 1 goto failed
+:dependencies_ready
 
 echo Running desktop tests...
 call npm.cmd test

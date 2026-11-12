@@ -27,6 +27,16 @@ describe('model selector', () => {
     expect(html).not.toContain('Qwen Test')
   })
 
+  it('offers only the backends the caller can run', async () => {
+    const html = await renderToString(createSSRApp(ModelSelector, {
+      backend: 'claude_code', model: 'sonnet', options, backends: ['claude_code'],
+    }))
+    expect((html.match(/<button\b/g) ?? []).length).toBe(1)
+    expect(html).toContain('aria-label="claude_code" aria-pressed="true"')
+    expect(html).toContain('Sonnet')
+    expect(html).not.toContain('GPT Test')
+  })
+
   it('keeps an unlisted model editable in the same row', async () => {
     const html = await markup('codex', 'future-model')
     expect(html).toContain('value="future-model"')

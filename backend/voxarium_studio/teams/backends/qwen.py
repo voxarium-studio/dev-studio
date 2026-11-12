@@ -17,12 +17,19 @@ import tempfile
 import time
 from collections import deque
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from ..changes import edit_stat
-from .base import AgentBackend, AgentEvent, AgentRunRequest, register_backend
+from .base import (
+    AgentBackend,
+    AgentEvent,
+    AgentRunRequest,
+    register_backend,
+    register_context_inspector,
+)
 from .cli_stream import _Oversized, _drain, _frames
 from .mcp_bridge import bridge_servers
 from .recovery import recovery_prompt
@@ -232,9 +239,9 @@ def _command(launcher: list[str], request: AgentRunRequest, config: Path
             str(image["path"]) for image in request.images
         )
     if request.system_prompt:
-        # Full replacement, not an append: the prompt the Studio assembles — System
-        # Prompt Base, Responsibility, identity, run context — is the session's whole
-        # system prompt, and Qwen Code's default one is not sent alongside it.
+        # Full replacement, not an append: the prompt the Studio assembles —
+        # Responsibility, identity, run context — is the session's whole system
+        # prompt, and Qwen Code's default one is not sent alongside it.
         candidate = [*argv, "--system-prompt", request.system_prompt]
         if len(subprocess.list2cmdline(candidate).encode("utf-16-le")) // 2 < 30_000:
             argv = candidate
@@ -259,6 +266,9 @@ class QwenBackend(AgentBackend):
     name = "qwen"
     named_agents = False
     session_recovery = True
+    # Qwen Code ignores Studio effort, so a task left on "Auto" is not sent to the
+    # Effort Solver on this backend (§10.3, §10.11).
+    supports_effort = False
 
     def is_available(self) -> tuple[bool, str]:
         if _launcher() is None:
@@ -274,6 +284,21 @@ class QwenBackend(AgentBackend):
         if not available:
             yield AgentEvent(kind="error", text=reason, is_final=True)
             return
+        inspector = None
+        if request.session_key and not request.text_only:
+            inspector = _ContextInspector(request)
+            register_context_inspector(request.session_key, inspector)
+        try:
+            async with aclosing(self._run(request)) as events:
+                async for event in events:
+                    if inspector is not None and event.session_id:
+                        inspector.session_id = event.session_id
+                    yield event
+        finally:
+            if inspector is not None:
+                inspector.running = False
+
+    async def _run(self, request: AgentRunRequest) -> AsyncIterator[AgentEvent]:
         try:
             async with bridge_servers(request.mcp_servers, request.max_message_bytes) as servers:
                 current = replace(request, mcp_servers=servers)
@@ -371,6 +396,71 @@ class QwenBackend(AgentBackend):
                     if not task.done():
                         task.cancel()
                 await asyncio.gather(*pending, return_exceptions=True)
+
+
+#: The subcommand is tried as the user would type it. Up to at least 0.27 its headless
+#: action discards the report and only acknowledges, so the flag form follows (§10.4).
+_CONTEXT_COMMANDS = ("/context detail", "/context -d")
+_CONTEXT_HEADING = "## Context Usage"
+
+
+class _ContextInspector:
+    """Qwen's own `/context` for a session between turns (§10.4).
+
+    Qwen keeps no process to ask, so the saved session is reopened with the settings of
+    its last turn — model, system prompt, tools and MCP servers are what the report
+    measures. A slash command is answered by the CLI itself: no model request is made.
+    """
+
+    def __init__(self, request: AgentRunRequest) -> None:
+        # Settings only: the turn's own text and attachments are not kept alive here.
+        self._request = replace(request, prompt="", recovery_prompt="", images=[], inbox=None)
+        self.session_id = request.resume_session_id
+        self.running = True
+        self._lock = asyncio.Lock()
+
+    @property
+    def ready(self) -> bool:
+        return not self.running and bool(self.session_id)
+
+    async def context_report(self) -> str:
+        if self.running:
+            raise RuntimeError("Wait for the current Qwen Code turn to finish")
+        if not self.session_id:
+            raise RuntimeError("The Qwen Code session was never started")
+        if self._lock.locked():
+            raise RuntimeError("Context inspection is already running")
+        async with self._lock:
+            base = self._request
+            async with bridge_servers(base.mcp_servers, base.max_message_bytes) as servers:
+                for command in _CONTEXT_COMMANDS:
+                    report = await self._ask(replace(
+                        base, mcp_servers=servers, prompt=command,
+                        resume_session_id=self.session_id))
+                    if _CONTEXT_HEADING in report:
+                        return report
+        raise RuntimeError("Qwen Code returned no /context report in headless mode")
+
+    async def _ask(self, request: AgentRunRequest) -> str:
+        if _command([], request, Path("mcp.json"))[1] != request.prompt:
+            # A role too long for the command line travelled inside each message, so the
+            # session ran on Qwen's own system prompt. Wrapped here, the command would
+            # stop being one and reach the model as text.
+            request = replace(request, system_prompt="")
+        text = ""
+        errors: list[str] = []
+        async with aclosing(QwenBackend()._run_once(request)) as events:
+            async for event in events:
+                if event.kind == "text" and not event.data.get("parent_tool_use_id"):
+                    text = event.text
+                elif event.kind == "error":
+                    errors.append(event.text)
+                elif event.kind == "result" and event.data.get("num_turns"):
+                    raise RuntimeError("This Qwen Code version does not answer /context in "
+                                       "headless mode: the command was sent to the model")
+        if errors and _CONTEXT_HEADING not in text:
+            raise RuntimeError(errors[-1])
+        return text
 
 
 def _mcp_servers(servers: dict[str, Any]) -> dict[str, Any]:

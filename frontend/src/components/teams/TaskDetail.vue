@@ -943,7 +943,7 @@ async function complete() {
             <ModelEffortSlider
               :model-value="runSettings.effort"
               :levels="teams.options?.effort_levels"
-              :default-title="t('teams.editor.effortDefault')"
+              :default-title="t('taskDetail.header.effortSolverAtStart')"
               readonly
             />
           </span>
@@ -1598,10 +1598,11 @@ async function complete() {
     </div>
 
     <!-- Full height beside the whole dialog, not inside the transcript: the session's
-         status — its sub-agents, skills, MCP servers and the files it touched — is a property
+         status — its sub-agents, skills, MCP servers, the files it declared and the files it
+         touched — is a property
          of the task rather than of the conversation, and a reviewer reads the two together. -->
     <aside v-if="!embedded" class="w-[298px] shrink-0 border-l border-line">
-      <SessionStatus :messages="task.messages" :subagents="delegated">
+      <SessionStatus :messages="task.messages" :subagents="delegated" :write-paths="task.write_paths ?? []">
         <TaskChanges
           :team-id="task.team_id"
           :task-id="task.id"

@@ -67,7 +67,7 @@ async def test_evaluation_uses_only_title_and_description_with_solver_settings(m
     solution = await runner.solve_effort(member, "Исправить прыжок", "Jump once on Space.", max_message_bytes=12345)
     assert selected == ["test_solver"]
     assert solution.scores.model_dump() == SCORES
-    assert solution.effort == 4 and solution.effort_level == "xhigh"
+    assert solution.effort == 3 and solution.effort_level == "high"
     request = backend.request
     assert json.loads(request.prompt) == {"title": "Исправить прыжок", "description": "Jump once on Space."}
     assert request.system_prompt == DEFAULT_SYSTEM_PROMPT
@@ -121,7 +121,7 @@ async def test_text_response_is_used_when_result_has_no_text(member, monkeypatch
         AgentEvent(kind="result", text="", is_final=True),
     ])
     monkeypatch.setattr(runner, "get_backend", lambda _name: backend)
-    assert (await runner.solve_effort(member, "Title", "Brief")).effort == 4
+    assert (await runner.solve_effort(member, "Title", "Brief")).effort == 3
 
 
 @pytest.mark.parametrize("events", [
