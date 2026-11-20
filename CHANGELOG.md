@@ -1,5 +1,43 @@
 # Changelog
 
+## v6.1.0 — 2026-11-20
+
+### Agent backends and context
+
+- Added Antigravity (`agy`) for tasks and chats through Agent Client Protocol, with per-session MCP servers, model and effort selection, permission handling, and session recovery from saved context. Added Antigravity to the status bar and Orchestrator settings.
+- Added multiple OpenAI-compatible connections in global Settings. Each connection has its own URL, API key, icon, model catalog, default model, and context-window setting. Connections are available to teams, tasks, chats, and subagents. API keys stay in the user's local configuration.
+- Added streaming Responses API and Chat Completions support, including reasoning, function tools, image input, and local session resumption. Auto mode uses Responses for `api.openai.com` and Chat Completions for other hosts. Either API can be selected explicitly.
+- Added an optional per-connection tokens-per-minute limit shared across projects and runs. Studio reserves capacity before sending requests and waits when the budget is exhausted.
+- Added context-window-aware compaction for OpenAI-compatible sessions, including chunked summarization, bounded tool output, and paginated access to large results. Studio can recover from provider context overflows and keeps the full conversation available in the UI.
+- Added bounded retries for transient streaming failures and a larger output budget when generation is cut short. Tool calls execute only after a complete response. Streamed text and reasoning update a single transcript block each, including when viewing older fragmented transcripts.
+- Extended Context Viewer to show retained OpenAI API session history, including the system instructions, enabled tool definitions, and the summary and messages kept after compaction. The latest request's input token count is shown separately.
+- Made Orchestrator remap automatically chosen models when a task or chat changes backends, while preserving explicit model choices. Continuations start a session on the new backend using saved conversation context.
+- Updated Claude Code quota reporting and context-window detection. Automatic task compaction uses a configurable percentage of the reported window, with a token threshold for backends that omit the window. Task and Producer conversations now show when compaction is in progress.
+
+### Producer and desktop
+
+- Linked new and reused tasks to stable Producer Plan items. The plan shows linked task statuses and reopen counts. Producer requires justification for adding more work to an item and progressively more justification for reopening a completed task in place.
+- Added a chat launcher with an unread count across Studio pages. It can open the docked Producer conversation in a floating popup while retaining its draft and attachments.
+- Added recent measured output tokens per second to the status bar for backends that report enough data. Samples are scoped to the current project and expire when no fresh measurement is available.
+- Switched the interface to bundled Allo with Inter as the Cyrillic fallback. Appearance settings still offer a choice of monospace font.
+- Fixed desktop session restore to wait for the project's initial route to settle and to open the default page when no specific page was saved.
+- Fixed Windows backend restart detection. The launcher checks that the port is free and waits for a health response from the current launch before reporting readiness.
+
+### Remote Documents and administration
+
+- Enabled Documents sync with Remote v2. Project Settings separates selecting a Remote project, previewing reconciliation, and confirming activation. The preview shows planned uploads, downloads, deletions, and conflicts. The v2 client checks the project, server instance, account, and sync cursor before syncing or opening a collaborative room.
+- Added a Studio wizard for migrating an explicitly selected legacy project to Remote v2. It verifies the existing Remote identity and leaves sync disabled until the user previews and confirms reconciliation.
+- Added explicit recovery for interrupted binding changes and checkpoint archiving for recreated Remote projects or rolled-back cursors. These operations preserve local Markdown and require a fresh preview before reactivation.
+- Added confirmation of which local projects use each Remote URL, with separate actions for replacing or removing keys, changing URLs, and deleting profiles. Active projects must disconnect before credential changes, and bound projects prevent URL changes or profile deletion.
+- Updated Remote Admin with Docker installation discovery, SSH connection testing, in-place updates with health checks and rollback, and an explicit **Migrate & Update** action that backs up v1 data before upgrading it to v2.
+- Added public HTTP-by-IP installation and an option to enable it on existing loopback installs. Studio accepts bare IP addresses and connects over HTTP and WebSocket. HTTP sends credentials and data without encryption. Remote Admin also supports HTTPS by domain and SSH-tunnel access.
+
+### Remote AI
+
+- Added opt-in Remote AI control between Studio installations. Owners register a device, publish a project, and grant specific users and devices access to selected teams, members, and resources. Remote AI is off by default on the server and has its own opt-in controls in Studio.
+- Added a Remote AI workspace for viewing task and chat status and transcripts, creating and editing task drafts, adding notes, starting or cancelling work, and sending chat messages within the granted permissions. Commands execute on the owner's Studio. Command receipts help recover the outcome after a disconnect and prevent duplicate execution.
+- Added grant revocation and device invalidation on personal-key rotation, revocation, or account deletion. The relay stores only authorization records and command audit metadata. The executing Studio stores prompts, transcripts, and results. Android interoperability has separate acceptance requirements.
+
 ## v6.0.0 — 2026-11-17
 
 - Added desktop project tabs and multiple windows, with tab transfer between windows and session restore. Each project keeps its own interface, connections, plugins and agent sessions while sharing one backend; moving a live tab preserves its renderer without reloading.
