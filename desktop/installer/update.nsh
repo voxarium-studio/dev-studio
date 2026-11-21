@@ -7,6 +7,9 @@
   Var studioInstallDir
   Var studioInstalledVersion
   Var studioExistingInstall
+  Var studioUpgradeTempActive
+  Var studioSavedTemp
+  Var studioSavedTmp
 !endif
 
 !macro customHeader
@@ -15,6 +18,7 @@
 !macroend
 
 !macro customInstall
+  Call StudioRestoreUpgradeTemp
   # Keep the actual build label for Windows and the next upgrade page (§2.7).
   # Electron's VERSION remains numeric for packaging and the updater.
   WriteRegStr SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" "DisplayVersion" "$(studio_buildVersion)"
@@ -23,6 +27,7 @@
 
 !macro customInit
   Call StudioDetectInstallation
+  Call StudioShortenUpgradeTemp
 !macroend
 
 !macro customWelcomePage
@@ -43,6 +48,57 @@
         StrCpy $studioInstalledVersion "$(studio_unknownVersion)"
       ${EndIf}
     ${EndIf}
+  FunctionEnd
+
+  Function StudioShortenUpgradeTemp
+    ${If} $studioExistingInstall != "1"
+    ${OrIf} $studioUpgradeTempActive == "1"
+    ${OrIfNot} ${FileExists} "$PROFILE\*.*"
+      Return
+    ${EndIf}
+
+    Push $0
+    Push $1
+    ${GetRoot} "$TEMP" $0
+    ${GetRoot} "$PROFILE" $1
+    ${If} $0 != ""
+    ${AndIf} $0 == $1
+      StrLen $0 $TEMP
+      StrLen $1 $PROFILE
+      # The legacy uninstaller stages every file under $PLUGINSDIR\old-install.
+      # Give it room for deeply nested plugin environments within its Win32 path limit.
+      ${If} $1 < $0
+        StrCpy $studioUpgradeTempActive "1"
+        ReadEnvStr $studioSavedTemp "TEMP"
+        ReadEnvStr $studioSavedTmp "TMP"
+        System::Call 'kernel32::SetEnvironmentVariableW(w "TEMP", w "$PROFILE") i.r0'
+        System::Call 'kernel32::SetEnvironmentVariableW(w "TMP", w "$PROFILE") i.r1'
+        ${If} $0 == 0
+        ${OrIf} $1 == 0
+          Call StudioRestoreUpgradeTemp
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+    Pop $1
+    Pop $0
+    ClearErrors
+  FunctionEnd
+
+  Function StudioRestoreUpgradeTemp
+    ${If} $studioUpgradeTempActive != "1"
+      Return
+    ${EndIf}
+    ${If} $studioSavedTemp == ""
+      System::Call 'kernel32::SetEnvironmentVariableW(w "TEMP", p 0)'
+    ${Else}
+      System::Call 'kernel32::SetEnvironmentVariableW(w "TEMP", w "$studioSavedTemp")'
+    ${EndIf}
+    ${If} $studioSavedTmp == ""
+      System::Call 'kernel32::SetEnvironmentVariableW(w "TMP", p 0)'
+    ${Else}
+      System::Call 'kernel32::SetEnvironmentVariableW(w "TMP", w "$studioSavedTmp")'
+    ${EndIf}
+    StrCpy $studioUpgradeTempActive "0"
   FunctionEnd
 
   Function StudioUpdatePage
@@ -89,6 +145,7 @@
 
   Function StudioDirectoryPre
     Call StudioDetectInstallation
+    Call StudioShortenUpgradeTemp
     ${If} $studioExistingInstall == "1"
     ${OrIf} ${isUpdated}
       Abort

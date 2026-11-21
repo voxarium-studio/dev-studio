@@ -206,6 +206,31 @@ def test_edges_serialise_with_from_and_to_on_the_wire(client: TestClient) -> Non
     assert [issue for issue in body["issues"] if issue["level"] == "error"] == []
 
 
+def test_conditional_pipeline_edit_preserves_the_legacy_path_and_rejects_stale_writes(client: TestClient) -> None:
+    directory = client.app.state.ctx.paths.pipelines
+    legacy = directory / "legacy-name.yml"
+    legacy.write_text("id: test-pipeline\nname: Original\nnodes: []\nedges: []\n", encoding="utf-8")
+    url = "/api/pipelines/test-pipeline"
+    initial = client.get(url).json()
+    with legacy.open("a", encoding="utf-8") as file:
+        file.write("# An external edit\n")
+
+    change = {**initial["pipeline"], "name": "Native edit"}
+    rejected = client.put(url, params={"expected_revision": initial["revision"]}, json=change)
+    assert rejected.status_code == 409
+    assert "# An external edit" in legacy.read_text(encoding="utf-8")
+    fresh = client.get(url).json()
+    saved = client.put(url, params={"expected_revision": fresh["revision"]}, json=change)
+    assert saved.status_code == 200, saved.text
+    assert client.get(url).json()["revision"] == saved.json()["revision"]
+    assert "name: Native edit" in legacy.read_text(encoding="utf-8")
+    assert not (directory / "test-pipeline.yaml").exists()
+
+    legacy.unlink()
+    assert client.put(url, params={"expected_revision": saved.json()["revision"]}, json=change).status_code == 409
+    assert client.get(url).status_code == 404
+
+
 def test_a_dangling_edge_is_rejected_by_the_schema(client: TestClient) -> None:
     response = client.post(
         "/api/pipelines",

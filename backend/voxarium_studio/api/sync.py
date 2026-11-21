@@ -107,6 +107,11 @@ def activated_model(ctx: Any) -> bool:
     return active
 
 
+def allows_local_document_edit(ctx: Any) -> bool:
+    # §2.7.1: ordinary native edits must never enter a live collaboration room.
+    return not ctx.config.sync.enabled and not ctx.sync._sessions
+
+
 class EditorRegister(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
     document_path: str
@@ -250,6 +255,7 @@ async def get_remote(request: Request, ctx: Ctx) -> dict[str, Any]:
         "binding_generation": ctx.docs.transitions.generation,
         "state": state,
         "reason": reason,
+        "local_document_editing": state == "disabled" and allows_local_document_edit(ctx),
         "active_rooms": len(ctx.sync._sessions),
         "pending_writes": len(ctx.sync._pending) + len(ctx.sync._live_writes),
         "binding_change": change_state,

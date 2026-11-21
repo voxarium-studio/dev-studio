@@ -9,6 +9,7 @@ const props = defineProps<{
   titleKey: MessageKey
   subtitle: string
   sections: readonly { id: string; titleKey: MessageKey }[]
+  sectionLink?: string
   available: boolean
   message?: string | null
 }>()
@@ -77,21 +78,32 @@ function spyOnSections() {
 
 // The sections exist only once the config has arrived, which may be after the page mounts —
 // hence both: an `immediate` watcher would run during setup, before there is a DOM to observe.
-onMounted(() => {
-  if (props.available) spyOnSections()
-})
-watch(
-  () => props.available,
-  (ready) => (ready ? spyOnSections() : stopSpying()),
-  { flush: 'post' },
-)
+function followSectionLink() {
+  const id = props.sectionLink
+  if (props.available && id && props.sections.some((section) => section.id === id)) {
+    goToSection(id, 'instant')
+  }
+}
+
+function refreshSections() {
+  if (props.available) {
+    spyOnSections()
+    followSectionLink()
+  } else {
+    stopSpying()
+  }
+}
+
+onMounted(refreshSections)
+watch(() => props.available, refreshSections, { flush: 'post' })
+watch(() => props.sectionLink, followSectionLink, { flush: 'post' })
 onBeforeUnmount(stopSpying)
 
-function goToSection(id: string) {
+function goToSection(id: string, behavior?: ScrollBehavior) {
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   document
     .getElementById(id)
-    ?.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' })
+    ?.scrollIntoView({ behavior: behavior ?? (reduced ? 'auto' : 'smooth'), block: 'start' })
 }
 
 </script>

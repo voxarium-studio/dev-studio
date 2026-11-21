@@ -450,6 +450,40 @@ def test_the_http_surface_answers_409_for_a_stale_save(client: TestClient) -> No
     assert new.status_code == 200
 
 
+def test_scoped_local_edit_cannot_overwrite_a_remote_or_deleted_document(client: TestClient, project: Path) -> None:
+    binding = client.post("/api/projects/open", json={"path": str(project)}).json()
+    scope = f"/api/projects/{binding['project_id']}"
+    endpoint = f"{scope}/docs/spec.md"
+    created = client.put(endpoint, json={"content": "# Spec\n", "exclusive": True}).json()
+    remote = client.get(f"{scope}/remote").json()
+    assert remote["local_document_editing"]
+    body = {
+        "local_edit": True,
+        "content": "# Native edit\n",
+        "backend_epoch": remote["backend_epoch"],
+        "expected_binding_generation": remote["binding_generation"],
+        "expected_updated_at": created["updated_at"],
+    }
+    assert client.put(endpoint, json={"local_edit": True, "content": "# Blind write\n"}).status_code == 422
+    save = client.put(endpoint, json=body)
+    assert save.status_code == 200, save.text
+    assert save.json()["content"] == "# Native edit\n"
+    body["expected_updated_at"] = save.json()["updated_at"]
+
+    ctx = client.app.state.ctx
+    ctx.config.sync.enabled = True
+    try:
+        assert not client.get(f"{scope}/remote").json()["local_document_editing"]
+        blocked = client.put(endpoint, json=body)
+        assert blocked.status_code == 409
+        assert blocked.json()["code"] == "document_requires_collaboration"
+    finally:
+        ctx.config.sync.enabled = False
+    assert client.delete(endpoint).status_code == 200
+    assert client.put(endpoint, json=body).status_code == 409
+    assert client.get(endpoint).status_code == 404
+
+
 async def test_a_write_answers_with_the_same_shape_a_read_does(ctx: AppContext) -> None:
     """The editor adopts the payload it gets back, so a save has to rebuild both panels.
 

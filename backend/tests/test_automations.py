@@ -250,6 +250,17 @@ def test_run_now_works_on_a_disabled_automation_and_clearing_the_log_empties_it(
     assert client.delete("/api/automations/runs").json()["runs"] == []
 
 
+def test_a_rule_named_runs_can_be_deleted_without_clearing_history(
+    client: TestClient, project: Path
+) -> None:
+    write_automations(project, {**NOTIFY_ON_REVIEW, "id": "runs", "enabled": False})
+    run = client.post("/api/automations/runs/run").json()["run"]
+
+    deleted = client.delete("/api/automations/runs/definition").json()
+    assert deleted["automations"] == []
+    assert [row["id"] for row in deleted["runs"]] == [run["id"]]
+
+
 # ------------------------------------------------------------------ tasks
 
 

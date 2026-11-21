@@ -19,7 +19,7 @@ from ..core.security import UNTRUSTED_FILE_HEADERS
 from ..explorer.service import PathOutsideProject
 from ..teams.docs import MAX_ASSET_BYTES, DocumentChangedOnDisk, FolderInUse, FolderStyleUnreadable
 from .deps import Ctx
-from .sync import FencedRoute, activated_model, bind_http_editor_inventory
+from .sync import FencedRoute, activated_model, allows_local_document_edit, bind_http_editor_inventory
 
 router = APIRouter(prefix="/docs", tags=["docs"], route_class=FencedRoute,
                    dependencies=[Depends(bind_http_editor_inventory)])
@@ -54,6 +54,8 @@ class DocWrite(DocumentFence):
     """The live room this Markdown was materialised from, when the editor saving it is the
     room's scribe (§16.4). It marks the write as the room's own, so online sync pushes it as
     such instead of as an edit made from outside the room."""
+    local_edit: bool = False
+    """A native edit of an existing document with a captured version and binding (§2.7.1)."""
 
 
 class DocMove(DocumentFence):
@@ -361,6 +363,12 @@ async def write_doc(path: str, payload: DocWrite, request: Request, ctx: Ctx) ->
     old_marker = None
     try:
         relative = ctx.docs.relative(ctx.docs.resolve(path))
+        if payload.local_edit and (
+            not payload.expected_updated_at or not payload.backend_epoch
+            or payload.expected_binding_generation is None or payload.exclusive
+            or payload.editor_id is not None or payload.sid is not None or payload.collab_session is not None
+        ):
+            raise HTTPException(422, "A local edit requires the document version and binding.")
         if payload.collab_session is not None:
             if payload.sid is not None and payload.sid != payload.collab_session:
                 raise HTTPException(409, {"code": "unknown_sid", "details": {}})
@@ -370,8 +378,16 @@ async def write_doc(path: str, payload: DocWrite, request: Request, ctx: Ctx) ->
             ctx.sync.validate_live_write(relative, payload.sid,
                                          expected_binding_generation=payload.expected_binding_generation,
                                          editor_id=payload.editor_id)
-        generation = _http_generation(ctx, payload, relative,
-                                      browser_save=activated_model(ctx) and "origin" in request.headers)
+
+        def validate_write() -> int | None:
+            # Recheck at the filesystem boundary as well as at admission. A legacy
+            # sync enable can change this setting without advancing the generation.
+            if payload.local_edit and not allows_local_document_edit(ctx):
+                raise HTTPException(409, {"code": "document_requires_collaboration"})
+            return _http_generation(ctx, payload, relative,
+                                    browser_save=activated_model(ctx) and "origin" in request.headers)
+
+        generation = validate_write()
         if payload.editor_id is not None:
             save = ctx.docs.transitions.begin_editor_save(
                 payload.editor_id, payload.backend_epoch, generation,
@@ -390,7 +406,7 @@ async def write_doc(path: str, payload: DocWrite, request: Request, ctx: Ctx) ->
         # after the final lease check. Rejected waiters cannot restore one
         # another's rejected markers, and the bus still sees the marker first.
         with ctx.docs.transitions.http_mutation_guard(
-            lambda: _http_generation(ctx, payload, relative), save=save,
+            validate_write, save=save,
             before_mutation=mark_live_write,
         ):
             result = await ctx.docs.write(
@@ -400,6 +416,7 @@ async def write_doc(path: str, payload: DocWrite, request: Request, ctx: Ctx) ->
                 expected_updated_at=payload.expected_updated_at,
                 exclusive=payload.exclusive,
                 expected_binding_generation=generation,
+                require_existing=payload.local_edit,
             )
         if save is not None:
             receipt = ctx.docs.transitions.record_saved(save)

@@ -915,6 +915,7 @@ class DocStore:
         expected_updated_at: str | None = None,
         exclusive: bool = False,
         expected_binding_generation: int | None = None,
+        require_existing: bool = False,
     ) -> dict[str, object]:
         """Write a document, atomically.
 
@@ -936,6 +937,8 @@ class DocStore:
                     raise ValueError(f"Document exceeds {MAX_DOC_BYTES} bytes")
 
                 path = self.resolve(relative)
+                if require_existing and not path.is_file():
+                    raise DocumentChangedOnDisk(f"{self.relative(path)!r} no longer exists")
                 if exclusive and path.exists():
                     raise FileExistsError(f"{self.relative(path)!r} already exists")
                 if expected_updated_at is not None and path.is_file():

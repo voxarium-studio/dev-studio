@@ -1038,7 +1038,8 @@ export function createApiClient(session: ProjectSession = rendererSession) {
         body: { enabled },
       }),
     deleteAutomation: (id: string) =>
-      request<AutomationsOverview>('DELETE', `/automations/${encodeURIComponent(id)}`),
+      // The short URL for a hand-authored `runs` rule is also the activity log.
+      request<AutomationsOverview>('DELETE', `/automations/${encodeURIComponent(id)}${id === 'runs' ? '/definition' : ''}`),
     /** The action, now, with nothing having happened — works on a disabled automation too. */
     runAutomation: (id: string) =>
       request<{ run: AutomationRun }>('POST', `/automations/${encodeURIComponent(id)}/run`),

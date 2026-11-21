@@ -11,7 +11,7 @@
  * `tokens.css`; the store writes exactly three custom properties of its own — the accent
  * *seed*, the node tint and, when the user has picked one, the text size — plus whatever
  * `custom_tokens` names. A monospace face that is not on the machine is fetched when first
- * selected; the interface face is always Allo, bundled.
+ * selected; both interface faces (Allo Round 100 and its Inter fallback) are bundled.
  *
  * The seed rather than the accent itself: `:root` points `--vxs-accent` at
  * `--vxs-accent-seed`, so a `custom_tokens` override of `--vxs-accent` still wins — it is

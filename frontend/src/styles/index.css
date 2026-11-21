@@ -9,3 +9,30 @@
 @import './base.css';
 /* Last: the block editor wears `.markdown-body` and adds to it, so it has to win. */
 @import './editor.css';
+
+/* Allo (SIL OFL; public/fonts/allo/OFL.txt) has ROND=100 baked into the outlines.
+   Its glyph coverage leaves Cyrillic and other missing characters to Inter (§7). */
+@font-face {
+  font-family: 'Allo Round 100';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/allo/Allo-Rond100.woff2') format('woff2');
+}
+
+/* Inter 4.1 (SIL OFL), including Latin and Cyrillic. See public/fonts/inter/LICENSE.txt. */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/inter/InterVariable.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/inter/InterVariable-Italic.woff2') format('woff2');
+}

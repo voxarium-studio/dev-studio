@@ -2,6 +2,7 @@
 /** Settings and maintenance belonging to the managed project (spec §5.1, §7). */
 import { FolderOpen } from 'lucide-vue-next'
 import { computed, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 
 import { api } from '@/api/client'
 import CommitDescriptionSettings from '@/components/settings/CommitDescriptionSettings.vue'
@@ -16,6 +17,7 @@ import { useThemeStore } from '@/stores/theme'
 
 const session = useSessionStore()
 const theme = useThemeStore()
+const route = useRoute()
 const config = computed(() => session.project?.config ?? null)
 const saveError = ref<string | null>(null)
 const savingOther = ref(false)
@@ -233,6 +235,7 @@ async function clearCache() {
     title-key="projectSettings.title"
     :subtitle="`${session.project?.data_dir ?? ''}/config.yaml`"
     :sections="SECTIONS"
+    :section-link="route.hash.slice(1)"
     :available="!!config"
     :message="saveError"
   >

@@ -134,7 +134,9 @@ async def set_enabled(automation_id: str, payload: EnabledPatch, ctx: Ctx) -> di
 
 
 @router.delete("/{automation_id}")
+@router.delete("/{automation_id}/definition")
 async def delete_automation(automation_id: str, ctx: Ctx) -> dict[str, Any]:
+    """Delete a rule, including a hand-authored ``runs`` whose short URL is the log."""
     try:
         ctx.automation_store.delete(automation_id)
     except AutomationNotFound as exc:

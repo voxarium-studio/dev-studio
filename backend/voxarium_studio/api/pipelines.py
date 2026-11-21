@@ -10,7 +10,7 @@ from sqlmodel import select
 
 from ..engine import cache as node_cache
 from ..engine import dag, asset_cache
-from ..engine.store import PipelineNotFound
+from ..engine.store import PipelineNotFound, PipelineRevisionConflict
 from ..models.pipeline import NodeRun, Run
 from ..schemas.pipeline import PipelineDefinition
 from .deps import Ctx
@@ -78,12 +78,17 @@ async def create_pipeline(pipeline: PipelineDefinition, ctx: Ctx) -> dict[str, A
 @router.get("/pipelines/{pipeline_id}")
 async def get_pipeline(pipeline_id: str, ctx: Ctx) -> dict[str, Any]:
     try:
-        pipeline = ctx.pipelines.get(pipeline_id)
+        pipeline, revision = ctx.pipelines.get_with_revision(pipeline_id)
     except PipelineNotFound as exc:
         raise HTTPException(status_code=404, detail=f"No pipeline {pipeline_id!r}") from exc
+    return _pipeline_detail(pipeline, revision, ctx)
+
+
+def _pipeline_detail(pipeline: PipelineDefinition, revision: str, ctx: Ctx) -> dict[str, Any]:
     issues = dag.validate(pipeline, ctx.registry)
     return {
         "pipeline": pipeline.model_dump(mode="json", by_alias=True),
+        "revision": revision,
         "issues": [
             {"level": i.level, "message": i.message, "node_id": i.node_id} for i in issues
         ],
@@ -92,20 +97,18 @@ async def get_pipeline(pipeline_id: str, ctx: Ctx) -> dict[str, Any]:
 
 @router.put("/pipelines/{pipeline_id}")
 async def update_pipeline(
-    pipeline_id: str, pipeline: PipelineDefinition, ctx: Ctx
+    pipeline_id: str, pipeline: PipelineDefinition, ctx: Ctx,
+    expected_revision: str | None = Query(default=None, pattern=r"^[0-9a-f]{64}$"),
 ) -> dict[str, Any]:
     if pipeline.id != pipeline_id:
         raise HTTPException(
             status_code=400, detail="Pipeline id in the body does not match the URL"
         )
-    ctx.pipelines.save(pipeline)
-    issues = dag.validate(pipeline, ctx.registry)
-    return {
-        "pipeline": pipeline.model_dump(mode="json", by_alias=True),
-        "issues": [
-            {"level": i.level, "message": i.message, "node_id": i.node_id} for i in issues
-        ],
-    }
+    try:
+        revision = ctx.pipelines.save_with_revision(pipeline, expected_revision=expected_revision)
+    except PipelineRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail="The pipeline changed on disk. Reload it before saving.") from exc
+    return _pipeline_detail(pipeline, revision, ctx)
 
 
 @router.delete("/pipelines/{pipeline_id}", status_code=204)
