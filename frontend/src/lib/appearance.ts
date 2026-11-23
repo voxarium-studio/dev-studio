@@ -86,8 +86,8 @@ export interface FontFace<T extends string> extends Choice<T> {
 }
 
 /*
- * Allo Round 100 and its per-glyph fallback Inter are bundled (§7).
- * These choices apply only to monospace content.
+ * No interface-font list: the interface is set in Allo alone (§7, 2026-11-17), bundled from
+ * the `allo-font` package in `main.ts`. Only the monospace face is still a choice.
  */
 export const MONO_FONTS: FontFace<ThemeConfig['mono_font']>[] = [
   { value: 'cascadia', label: 'Cascadia Code', stylesheet: null },

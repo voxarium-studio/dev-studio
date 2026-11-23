@@ -74,7 +74,7 @@ describe('exportTheme / parseImportedTheme', () => {
     expect(
       parseImportedTheme('{"palette": "warm", "surfaces": "tonal", "radius": "sharp", "mode": "light"}'),
     ).toEqual({ mode: 'light' })
-    // The bundled interface font has no preference key, so an old `font` goes the same way.
+    // The interface font has been Allo alone since 2026-11-17, so an old `font` goes the same way.
     expect(
       parseImportedTheme('{"look": "material", "font": "roboto", "mono_font": "fira"}'),
     ).toEqual({ mono_font: 'fira' })

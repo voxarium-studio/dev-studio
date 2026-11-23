@@ -10,7 +10,6 @@ import {
   X,
 } from 'lucide-vue-next'
 import { computed, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
 
 import { api } from '@/api/client'
 import type { ThemeConfig } from '@/api/types'
@@ -42,7 +41,6 @@ import { useUpdatesStore } from '@/stores/updates'
 const session = useSessionStore()
 const theme = useThemeStore()
 const updates = useUpdatesStore()
-const route = useRoute()
 
 const saveError = ref<string | null>(null)
 const savingOther = ref(false)
@@ -269,7 +267,6 @@ async function setNodeCache(value: boolean) {
     title-key="settings.title"
     :subtitle="t('settings.scopeHint')"
     :sections="SECTIONS"
-    :section-link="route.hash.slice(1)"
     :available="!!config"
     :message="saveError"
   >

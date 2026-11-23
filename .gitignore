@@ -17,8 +17,6 @@ frontend/dist/
 desktop/build/
 desktop/dist/
 desktop/locales/
-desktop-native/.gradle/
-desktop-native/.kotlin/
 
 # The commit stamp belongs to a wheel, not to a checkout: hatch_build.py force-includes
 # it from a temp dir, and one sitting here would outrank git in `voxarium_studio.build_info`.

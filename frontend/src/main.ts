@@ -10,6 +10,9 @@ import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
+// The interface typeface (§7): Allo's variable font and its obliques, bundled so it needs no
+// network. `tokens.css` names it first in `--vxs-font-sans`.
+import 'allo-font/allo.css'
 import './styles/index.css'
 
 // Must run before the first request goes out, so the token is available to the API

@@ -18,28 +18,23 @@ unstable and features unfinished.
 ## Build a Windows installer
 
 On Windows x64, install Node.js 22.12+ (x64, with npm) and
-[uv](https://docs.astral.sh/uv/), both available on `PATH`. Set `JAVA_HOME` to a
-Windows x64 [JetBrains Runtime SDK 25](https://github.com/JetBrains/JetBrainsRuntime/releases).
-Double-click
+[uv](https://docs.astral.sh/uv/), both available on `PATH`. Double-click
 [`build-installer.bat`](build-installer.bat) or run it from the repository root:
 
 ```powershell
 .\build-installer.bat
 ```
 
-The script builds the Kotlin Compose desktop client and packages it with NSIS.
-The installer includes the JVM, frontend, backend, built-in plugins and the
-Python and Node.js runtimes. The first build needs internet access for downloads.
+The script installs desktop dependencies from the lockfile, runs desktop tests and
+builds the NSIS installer, including the frontend, backend, built-in plugins and
+bundled Python/Node.js runtimes. The first build needs internet access for downloads;
+Python does not need to be installed separately. A failed step stops the build.
 
-The result is `desktop/dist/native/Voxarium-Studio-Setup-<build>.exe`, where
-`<build>` is the release tag or commit label. The script builds locally without
-publishing and pauses before closing. Use `.\build-installer.bat --no-pause` in
-automation. A failed step stops the build and returns a nonzero exit code. The
-script also accepts the legacy `--native` flag.
-
-The installer can replace a registered Electron installation in its current
-directory while preserving application settings and managed projects. See
-[native desktop setup](desktop-native/README.md) for installer and update details.
+The result is `desktop/dist/Voxarium-Studio-Setup-<build>.exe`, where `<build>` is
+the release tag or commit label. The script builds locally without publishing and
+pauses before closing so the result stays visible. Use
+`.\build-installer.bat --no-pause` in automation; failures return a nonzero exit code.
+See [desktop setup](desktop/README.md) for installer and update details.
 
 ## Run from source
 
@@ -66,7 +61,7 @@ uv run --extra teams voxarium_studio run /path/to/game-project
 ```
 
 Open <http://127.0.0.1:8765>. Project state lives in the managed project's
-`.voxarium_studio/` directory. Studio renames an existing project’s `voxarium_studio/` directory the first time it opens it. See [native desktop setup](desktop-native/README.md) for the Windows app.
+`.voxarium_studio/` directory. Studio renames an existing project’s `voxarium_studio/` directory the first time it opens it. See [desktop setup](desktop/README.md) for the Windows app.
 
 ## Trust and configuration
 

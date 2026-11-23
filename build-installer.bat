@@ -1,10 +1,7 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
-rem Build the Windows x64 Kotlin installer (dev spec 2.7.1).
+rem Build the Windows x64 installer using the desktop pipeline (dev spec §2.7).
 rem Pass --no-pause when running from a terminal or automation.
-
-rem Keep the old flag accepted by existing build commands.
-if /i "%~1"=="--native" shift /1
 
 pushd "%~dp0desktop"
 if errorlevel 1 exit /b 1
@@ -20,27 +17,25 @@ for %%T in (node.exe npm.cmd uv.exe) do (
 
 rem npm ci reinstalls everything; skip it while node_modules still matches the lock file it
 rem was installed from (prepare-runtime.ps1 does the same for the frontend).
-if exist "node_modules\.bin\electron-builder.cmd" (
-    fc /b package-lock.json node_modules\.studio-lock >nul 2>&1
-    if not errorlevel 1 goto dependencies_ready
-)
-echo Installing installer dependencies...
+fc /b package-lock.json node_modules\.studio-lock >nul 2>&1
+if not errorlevel 1 goto dependencies_ready
+echo Installing desktop dependencies...
 call npm.cmd ci --prefer-offline --no-audit --no-fund
 if errorlevel 1 goto failed
 copy /y package-lock.json node_modules\.studio-lock >nul
 if errorlevel 1 goto failed
 :dependencies_ready
 
-echo Building the Kotlin application image...
-call "%~dp0desktop-native\gradlew.bat" -p "%~dp0desktop-native" "-Pkotlin.daemon.jvmargs=-Xmx2g" test createDistributable
+echo Running desktop tests...
+call npm.cmd test
 if errorlevel 1 goto failed
 
-echo Building the Kotlin NSIS installer...
-call npm.cmd run dist:native -- --publish never
+echo Building the Windows x64 installer...
+call npm.cmd run dist -- --publish never
 if errorlevel 1 goto failed
 
 echo.
-echo Installer ready in "%~dp0desktop\dist\native".
+echo Installer ready in "%~dp0desktop\dist".
 set "build_exit=0"
 goto done
 

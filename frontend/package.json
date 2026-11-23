@@ -34,6 +34,7 @@
     "@vue-flow/core": "^1.48.2",
     "@vue-flow/minimap": "^1.5.4",
     "@vueuse/core": "^14.4.0",
+    "allo-font": "^1.0.0",
     "json5": "^2.2.3",
     "lucide-vue-next": "^1.0.0",
     "mdast-util-gfm-table": "^2.0.0",

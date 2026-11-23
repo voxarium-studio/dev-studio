@@ -3,11 +3,8 @@ Dim shell, files, root, executable, arguments
 Set shell = CreateObject("WScript.Shell")
 Set files = CreateObject("Scripting.FileSystemObject")
 root = files.GetParentFolderName(WScript.ScriptFullName)
-executable = root & "\desktop-native\build\compose\binaries\main\app\Voxarium Studio\Voxarium Studio.exe"
+executable = root & "\desktop\dist\win-unpacked\Voxarium Studio.exe"
 arguments = ""
-If Not files.FileExists(executable) Then
-  executable = root & "\desktop\dist\win-unpacked\Voxarium Studio.exe"
-End If
 If Not files.FileExists(executable) Then
   executable = root & "\desktop\node_modules\electron\dist\electron.exe"
   arguments = " """ & root & "\desktop" & """"

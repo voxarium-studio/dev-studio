@@ -13,7 +13,6 @@
     "icons": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-icons.ps1",
     "prepare:runtime": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-runtime.ps1",
     "dist": "npm run prepare:runtime && electron-builder --config electron-builder.cjs --win nsis --x64",
-    "dist:native": "electron-builder --config electron-builder.native.cjs --prepackaged \"../desktop-native/build/compose/binaries/main/app/Voxarium Studio\" --win nsis --x64",
     "pack": "npm run prepare:runtime && electron-builder --config electron-builder.cjs --win --x64 --dir"
   },
   "devDependencies": {
@@ -40,8 +39,6 @@
       "assets/tray.png",
       "assets/logo.png",
       "assets/icon.ico",
-      { "from": "../frontend/public/fonts/allo", "to": "fonts/allo", "filter": ["Allo-Rond100.woff2", "OFL.txt"] },
-      { "from": "../frontend/public/fonts/inter", "to": "fonts/inter", "filter": ["InterVariable.woff2", "LICENSE.txt"] },
       "locales/*.json",
       "updates.cjs",
       "update-feed.cjs",

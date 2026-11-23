@@ -47,23 +47,22 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-only-include = ["voxarium_studio", "plugins_builtin"]
+packages = ["voxarium_studio"]
 # The parent .gitignore's /voxarium_studio/ is managed-project data, but Hatch
 # applies it relative to backend/ and would drop the entire Python package.
 # Select the package explicitly, including the generated SPA required by §2.7.
 ignore-vcs = true
-# Built-in plugins provision their own environments after install (§2.1).
-exclude = ["**/__pycache__", "**/.venv", "**/node_modules", "*.py[cod]", "/voxarium_studio/_build_stamp.json"]
-
-[tool.hatch.build.targets.wheel.sources]
-"plugins_builtin" = "voxarium_studio/plugins_builtin"
+exclude = ["**/__pycache__", "*.py[cod]", "/voxarium_studio/_build_stamp.json"]
 
 # Writes voxarium_studio/_build_stamp.json into the wheel, so an installed Studio can still say
 # which commit it came from вЂ” see hatch_build.py and voxarium_studio/build_info.py.
 [tool.hatch.build.targets.wheel.hooks.custom]
 path = "hatch_build.py"
 
+# The built SPA lands in voxarium_studio/static (see frontend/vite.config.ts `outDir`), so it
+# ships inside the package and is served by the same process as the API.
 [tool.hatch.build.targets.wheel.force-include]
+"plugins_builtin" = "voxarium_studio/plugins_builtin"
 # The changelog lives at the repository root, where a changelog belongs. A copy travels
 # inside the package for the same reason the build stamp does: an installed Studio has no
 # checkout to read it from, and `GET /api/changelog` still has to answer (build_info.py).

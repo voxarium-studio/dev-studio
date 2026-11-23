@@ -3,7 +3,7 @@
 Electron wraps the existing Vue application and the same local FastAPI server.
 See dev spec §2.7 for lifecycle, storage and distribution decisions.
 
-## Build an Electron installer
+## Build an installer
 
 The approved logo is `assets/logo.png`. After replacing it, run `npm run icons` to
 regenerate the tray icon, multi-size Windows ICO and web assets in `frontend/public`.
@@ -12,9 +12,9 @@ Windows executable, shortcuts and installer (dev spec §2.7).
 
 On Windows x64, install Node.js 22.12+ (x64, with npm) and uv on the build machine.
 
-For the current Kotlin Compose installer, see
-[native desktop setup](../desktop-native/README.md). To build the Electron installer
-without publishing, run these commands from the repository root:
+Run [`build-installer.bat`](../build-installer.bat) from the repository root to
+install dependencies, run desktop tests and build the installer without publishing.
+It pauses before closing; use `--no-pause` for automation. To run the steps manually:
 
 ```powershell
 cd desktop
